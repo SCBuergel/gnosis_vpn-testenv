@@ -4,12 +4,36 @@ receivers:
       http:
         endpoint: "127.0.0.1:4318"
 
+# Without these two the collector has no backpressure: when the remote-write exporter falls behind, the
+# exporter queue grows in RAM until the kernel OOM-killer fires. That happened on 2026-09-18 — otelcol reached
+# 14 GB anon-RSS on a 15 GB host and the OOM killer took down a running suite mid-test.
+#
+# The trigger is unbounded metric cardinality: hoprd labels hopr_surb_balancer_* by session_id, and sessions
+# churn constantly, so the series count only ever grows (52 sessions = 270 series = 53 % of the exit's metrics
+# within one run). The collector must therefore be able to shed load rather than buffer it forever.
+processors:
+  # Hard ceiling. Above soft_limit the collector refuses new data; above the spike allowance it drops.
+  # Dropping metrics is strictly better than killing the test run that produced them.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
+    send_batch_size: 8192
+    timeout: 5s
+
 exporters:
   prometheusremotewrite:
     endpoint: "http://127.0.0.1:8428/api/v1/write"
+    # Bounded queue: block/drop when VictoriaMetrics is slow instead of growing without limit.
+    sending_queue:
+      enabled: true
+      queue_size: 1000
 
 service:
+  # memory_limiter MUST be first so it sees data before anything buffers it.
   pipelines:
     metrics:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [prometheusremotewrite]

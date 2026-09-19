@@ -1,0 +1,6 @@
+# name|CLIENT_IMAGE|HOPRD_BIN|CLUSTER_ENV|CLIENT_EXTRA_ENV|LOCALCLUSTER_BIN
+# The 2026-09-16 matrix: two client builds × two hoprd versions. Paths are the build host's.
+A-0961-hoprd412|gnosis_vpn-client:0.96.1|/root/hoprd-bins/hoprd-4.1.2-release|HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64||/root/testenv/hoprd-41/target/release/hoprd-localcluster
+B-0961-hoprd403|gnosis_vpn-client:0.96.1|/root/hoprd-bins/elf-4.0.3|||/root/testenv/hoprd-403/target/release/hoprd-localcluster
+C-ramp-hoprd412|gnosis_vpn-client:fix-surb-ramp|/root/hoprd-bins/hoprd-4.1.2-release|HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64||/root/testenv/hoprd-41/target/release/hoprd-localcluster
+D-ramp-hoprd403|gnosis_vpn-client:fix-surb-ramp|/root/hoprd-bins/elf-4.0.3|||/root/testenv/hoprd-403/target/release/hoprd-localcluster

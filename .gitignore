@@ -13,3 +13,4 @@ result*
 # e2e harness: node deps and run outputs
 e2e/node_modules/
 e2e/results/
+__pycache__/
