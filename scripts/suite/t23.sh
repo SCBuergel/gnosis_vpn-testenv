@@ -10,6 +10,10 @@ suite_kind gate
 # The gate exists for logging hot loops (1.6 GB/min was the incident), and 200 is 3x the normal rate.
 : "${DUR:=$(q 3600 600)}" "${INTERVAL:=300}" "${LOG_MB_MIN_MAX:=200}"
 suite_init; require_target
+# the soak must outlive the deadman (900 s default): fullrun5 ran 3600 s under it, the deadman disconnected the
+# client at +15 min, the call counted the remaining 45 min as loss (24 % delivered = 900/3600) and the verdict
+# still PASSed because a deadman disconnect is not a reconnect
+deadman_cover "$DUR"
 connect "$DEST" 20 || { verdict T23-sustained-soak FAIL "connect failed"; exit 1; }
 node_sampler_start t23 5
 in_client_bg "python3 /suite/probes/relprobe.py --host $TARGET_IP --port 8901 --rate-mbit 1.5 --duration $DUR --size 1200 --iface $WG_IFACE --out ${SUITE_RUN_IN_CLIENT}/t23-call"

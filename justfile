@@ -733,7 +733,7 @@ test name *args:
     eval "$(just _suite-env)"
     exec "{{justfile_directory()}}/scripts/suite/{{name}}.sh" {{args}}
 
-# Run a suite profile (smoke|regression|deep|soak|all) against the live stack; results in SUITE_OUT_DIR/<run-id>/
+# Run the regression suite (one run, every test; --fast, --very-fast, --only, --skip) against the live stack; results in SUITE_OUT_DIR/<run-id>/
 suite *args:
     #!/usr/bin/env bash
     set -euo pipefail

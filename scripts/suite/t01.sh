@@ -2,7 +2,7 @@
 # T01-topology-preconditions — Topology and funding preconditions, plus the relay forwarding probe: cluster running, all nodes
 # channels_open, node-to-node pings answer, each relay forwards a 1-hop session opened from the exit node
 # (node 0 → via node i → node j) within FWD_TIMEOUT s, every destination Ready at its hop count, no leftover
-# qdisc/timers on the host, and no foreign container named like ours. Aborts the suite on FAIL.
+# qdisc/timers on the host, both liveness-ping targets on the server. Aborts the suite on FAIL.
 source "$(dirname "$0")/lib.sh"
 suite_kind gate
 [ "${1:-}" = "--help" ] && { sed -n '2,6p' "$0"; usage_common; exit 0; }

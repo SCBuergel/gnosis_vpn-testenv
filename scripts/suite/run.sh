@@ -18,7 +18,8 @@
 # Scoring. Only a *gate* can fail a run. The suite tests ONE stack at a time (versions are run sequentially),
 # so host-dependent numbers are scored against the last stored value for that metric — the previous run,
 # usually the previous version — inside T03-repeatability-baseline's band. Without a T03-repeatability-baseline record for this stack the suite still runs
-# and records everything but refuses to score, and says so. --baseline runs t03 first to create that record.
+# and records everything but refuses to score, and says so. t03 runs third in every run, so the record exists from
+# the first full run on; `--only t01,t02,t03` creates it alone.
 # --ref-cell exists only for the explicit A/B path (a newly added test with no stored history yet).
 #
 # Results: SUITE_OUT_DIR/<run-id>/ (rows.jsonl, verdicts.jsonl, provenance.json, summary.csv, logs/, samples/).

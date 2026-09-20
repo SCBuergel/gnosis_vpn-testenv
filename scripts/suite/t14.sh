@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # T14-novpn-baseline — No-VPN baseline: the same transfers from the client container straight to the target (no tunnel).
-# Pass: all complete and at least 10× the tunnelled median recorded for this cell (if any).
+# Pass: all REPS downloads and uploads complete (a diagnostic, so a miss is WARN); rate and RTT are recorded.
 source "$(dirname "$0")/lib.sh"
 suite_kind diagnostic
 [ "${1:-}" = "--help" ] && { sed -n '2,4p' "$0"; usage_common; exit 0; }

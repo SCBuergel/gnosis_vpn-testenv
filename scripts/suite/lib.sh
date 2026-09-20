@@ -57,6 +57,7 @@ q() { if [ "${SUITE_FAST}" = "1" ]; then echo "$2"; else echo "$1"; fi; }
 
 SUITE_FAILED=0
 DEADMAN_PID=""
+DEADMAN_PIDFILE=""
 
 # ---------------------------------------------------------------------------
 # output
@@ -279,16 +280,38 @@ wait_dest_ready() {
 
 # The deadman runs fully detached with its stdio closed: a plain "( sleep; … ) &" inherits the pipe to the
 # runner's tee and holds it open for the whole timeout, so every connecting test would take DEADMAN seconds.
+#
+# `sleep && disconnect`, NOT `sleep; disconnect`: when disarm_deadman kills the sleep, bash must not fall through
+# to the disconnect. It did, and because disarm killed the sleep before the bash, every connect() made in a
+# subshell (CLIENT=… bash -c "source lib.sh; connect …", T19-background-load, T22-concurrent-clients) disconnected
+# its own client about one second after returning. fullrun5 T22-concurrent-clients: 5 of 7 clients across the
+# ladder moved 0 bytes; each log shows a Disconnect command ~30 s after Connect with the tunnel ping healthy, and
+# 2 of 4 surviving at n=4 is the race between the two kills. disarm_deadman now kills the bash first.
 arm_deadman() {
   disarm_deadman
-  setsid bash -c "sleep ${DEADMAN}; docker exec ${CLIENT} gnosis_vpn-ctl disconnect >/dev/null 2>&1 || true" \
+  DEADMAN_PIDFILE="${SUITE_RUN}/.deadman-${CLIENT}.pid"
+  # the bash records its own pid: setsid(1) forks when its caller is a process-group leader, and then $! is not it
+  setsid bash -c "echo \$\$ > '${DEADMAN_PIDFILE}'; sleep ${DEADMAN} && docker exec ${CLIENT} gnosis_vpn-ctl disconnect >/dev/null 2>&1 || true" \
     >/dev/null 2>&1 </dev/null &
   DEADMAN_PID=$!
   disown "$DEADMAN_PID" 2>/dev/null || true
 }
 disarm_deadman() {
-  if [ -n "${DEADMAN_PID}" ]; then pkill -P "${DEADMAN_PID}" 2>/dev/null || true; kill "${DEADMAN_PID}" 2>/dev/null || true; DEADMAN_PID=""; fi
+  local p kids
+  for p in $(cat "${DEADMAN_PIDFILE:-/dev/null}" 2>/dev/null) ${DEADMAN_PID}; do
+    kids=$(pgrep -P "$p" 2>/dev/null || true)
+    kill "$p" 2>/dev/null || true          # the bash first, so it can never run the disconnect on its way out
+    [ -n "$kids" ] && kill $kids 2>/dev/null || true
+  done
+  rm -f "${DEADMAN_PIDFILE:-}" 2>/dev/null || true
+  DEADMAN_PID=""
 }
+# deadman_cover SECONDS — raise DEADMAN so the armed disconnect cannot fire inside a session that must last SECONDS
+# (plus the ramp wait and a probe's end-of-stream report). Call it before connect(). T23-sustained-soak (3600 s)
+# and T24-sustained-upload (900 s) ran under the 900 s default: the deadman disconnected the client at +15 min,
+# the probe counted the rest as loss — fullrun5 T23 delivered 24 % = 900/3600 and still PASSed, because a deadman
+# disconnect is not a reconnect — and T24's upload never received its server report, so loss printed blank.
+deadman_cover() { DEADMAN=$(python3 -c "print(max(int('${DEADMAN}'), int('$1') + ${SURB_RAMP_WAIT} + 120))"); }
 trap 'disarm_deadman' EXIT
 
 # connect [DEST] [IDLE_SECONDS] — arms the deadman, connects, waits for Connected, idles.
@@ -418,8 +441,16 @@ for line in txt.splitlines():
 print("" if n == 0 else (int(tot) if tot == int(tot) else tot))' "$1"
 }
 
-save_client_log() { # save_client_log NAME SINCE [CONTAINER]
-  docker logs --since "$2" "${3:-$CLIENT}" > "${SUITE_RUN}/logs/$1.log" 2>&1 || true
+# save_client_log NAME SINCE [CONTAINER] — the client's log slice for the window. The DEBUG path-planner/selector
+# lines (the target T08-relay-attribution parses live from docker logs, ~40 MB/min, about 90 % of the volume) are
+# dropped unless SAVE_LOG_RAW=1: fullrun5 saved 30 GB of them and fullrun6 died at T10 with the disk full.
+# WARN/ERROR lines from those targets are kept.
+save_client_log() {
+  if [ "${SAVE_LOG_RAW:-0}" = 1 ]; then
+    docker logs --since "$2" "${3:-$CLIENT}" > "${SUITE_RUN}/logs/$1.log" 2>&1 || true
+  else
+    docker logs --since "$2" "${3:-$CLIENT}" 2>&1 | grep -a -v -E 'DEBUG.*hopr_transport::path::(planner|selector)' > "${SUITE_RUN}/logs/$1.log" || true
+  fi
 }
 
 # ---------------------------------------------------------------------------
