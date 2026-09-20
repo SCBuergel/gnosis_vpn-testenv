@@ -46,6 +46,10 @@ q() { if [ "${SUITE_FAST}" = "1" ]; then echo "$2"; else echo "$1"; fi; }
 : "${SUITE_RUN_GROUP:=default}"           # only used by the explicit A/B path
 : "${SUITE_BANDS_DIR:=${SUITE_OUT_DIR}/bands}"   # T03-repeatability-baseline bands, keyed on stack provenance
 : "${SUITE_REFS_DIR:=${SUITE_OUT_DIR}/refs}"     # per-metric reference values within a run group
+# SUITE_MODE=full|fast|veryfast (run.sh sets it; a test run on its own derives it from SUITE_FAST). Delta history is
+# kept PER MODE: a --very-fast T13 read 8.6 Mbit/s from a 2 MB transfer against 12.3 from the full run's 10 MB and
+# FAILed by -30 % (vfreview2, 2026-09-20), and the smoke number would then have become the next full run's reference.
+: "${SUITE_MODE:=$([ "${SUITE_FAST}" = 1 ] && echo fast || echo full)}"
 : "${DEADMAN:=900}"                       # armed disconnect fires after this many seconds
 : "${CONNECT_TIMEOUT:=240}"
 # transfer size and cap: a single-host localcluster moves a few Mbit/s, so 10 MB / 90 s completes where the
@@ -183,7 +187,8 @@ json.dump(d, open(sys.argv[1],"w"), indent=1)' "$(band_file)" "$1" "$(stack_key)
 # Without a T03-repeatability-baseline band for this stack there is no defensible tolerance, so the value is RECORDED, never scored.
 score_delta() {
   local t="$1" m="$2" v="$3" dir="${4:-higher_better}"
-  local hist="${SUITE_REFS_DIR}/history/${m}.jsonl"
+  local suffix=""; [ "${SUITE_MODE}" = full ] || suffix="@${SUITE_MODE}"
+  local hist="${SUITE_REFS_DIR}/history/${m}${suffix}.jsonl"
   mkdir -p "$(dirname "$hist")"
   local prev; prev=$(tail -1 "$hist" 2>/dev/null || true)
   # append this observation first so the history is complete even when it cannot be scored
@@ -192,7 +197,7 @@ json.dump({"t":round(time.time(),1),"stack_key":sys.argv[2],"cell":sys.argv[3],"
           open(sys.argv[1],"a")); open(sys.argv[1],"a").write("\n")' \
     "$hist" "$(stack_key)" "${SUITE_CELL:-default}" "$m" "$v" 2>/dev/null || true
   if ! have_band; then record "$t" "${m}=${v} (unscored: no T03-repeatability-baseline for stack $(stack_key))"; return 0; fi
-  if [ -z "$prev" ]; then record "$t" "${m}=${v} (first observation for this metric — stored as the baseline)"; return 0; fi
+  if [ -z "$prev" ]; then record "$t" "${m}=${v} (first observation for this metric in ${SUITE_MODE} mode, stored as the baseline)"; return 0; fi
   local tol out raw_tol clamped=0; raw_tol=$(band_get mde_pct); raw_tol=${raw_tol:-20}; tol=$raw_tol
   if python3 -c "import sys; sys.exit(0 if float('$raw_tol') > float('$BAND_MAX_PCT') else 1)"; then
     tol=$BAND_MAX_PCT; clamped=1
@@ -593,7 +598,7 @@ transfer_series() {
   done
   python3 -c 'import sys,json,statistics as st
 dm=[float(x) for x in sys.argv[1].split()]; um=[float(x) for x in sys.argv[2].split()]
-print(json.dumps({"down_median":st.median(dm),"up_median":st.median(um),"down_complete":int(sys.argv[3]),"up_complete":int(sys.argv[4]),"reps":len(dm)}))' "${dm[*]}" "${um[*]}" "$dc" "$uc"
+print(json.dumps({"down_median":round(st.median(dm),3),"up_median":round(st.median(um),3),"down_complete":int(sys.argv[3]),"up_complete":int(sys.argv[4]),"reps":len(dm)}))' "${dm[*]}" "${um[*]}" "$dc" "$uc"
 }
 
 

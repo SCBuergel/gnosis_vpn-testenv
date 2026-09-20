@@ -15,13 +15,18 @@ tc qdisc add dev $iface root handle 1: prio 2>/dev/null || true
 tc qdisc add dev $iface parent 1:3 handle 30: netem loss 0% 2>/dev/null || true
 tc filter add dev $iface protocol ip parent 1:0 prio 1 u32 match ip dport "$port" 0xffff flowid 1:3 2>/dev/null || true
 connect "$DEST" 15 || { verdict T20-fault-injection FAIL "connect failed"; exit 1; }
-total=$(( (${#LOSSES}+1) * STEP_S + 3*STEP_S ))
+# the call must cover the whole ladder: (1 settle + one step per loss value + 1 pause + 2 restore) x STEP_S. This used
+# ${#LOSSES}, the LENGTH of the string "1 5 20" (6), so the probe ran 180 s past the script, which read its report
+# before it was written and printed "call loss %" in every full run.
+n_loss=$(set -- $LOSSES; echo $#); total=$(( (n_loss+1) * STEP_S + 3*STEP_S ))
 in_client_bg "python3 /suite/probes/relprobe.py --host $TARGET_IP --port 8901 --rate-mbit 1.5 --duration $total --size 1200 --iface $WG_IFACE --out ${SUITE_RUN_IN_CLIENT}/t20-call"
 sleep "$STEP_S"
 for l in $LOSSES; do tc qdisc change dev $iface parent 1:3 handle 30: netem loss "${l}%"; emit_row T20-fault-injection arm="loss$l" t="$(date +%s)"; sleep "$STEP_S"; done
 tc qdisc change dev $iface parent 1:3 handle 30: netem loss 0%
 kill -STOP "$(node_pid "$RELAY")"; emit_row T20-fault-injection arm=pause t="$(date +%s)"; sleep "$STEP_S"; kill -CONT "$(node_pid "$RELAY")"; emit_row T20-fault-injection arm=restore t="$(date +%s)"; sleep "$((STEP_S*2))"
-e=$(log_errors "$LOG_SINCE"); save_client_log t20 "$LOG_SINCE"; still=$(client_is_connected && echo yes || echo no); disconnect
+e=$(log_errors "$LOG_SINCE"); save_client_log t20 "$LOG_SINCE"; still=$(client_is_connected && echo yes || echo no)
+i=0; until [ -s "$SUITE_RUN/t20-call.json" ] || [ "$i" -ge 30 ]; do sleep 1; i=$((i+1)); done   # the probe writes its report at the end of its duration
+disconnect
 j=$(cat "$SUITE_RUN/t20-call.json" 2>/dev/null || echo '{}')
 emit_row T20-fault-injection kind=summary "call=$j" "errors=$e" session_survived="$still" relay="$RELAY" port="$port"
 [ "$still" = yes ] && verdict T20-fault-injection PASS "session survived loss ladder [$LOSSES]% and a ${STEP_S}s relay pause; call loss $(json_get "$j" loss_pct)%, stalls>5s $(json_get "$j" stalls_gt_5s), reconnects $(json_get "$e" reconnects)" || verdict T20-fault-injection FAIL "session died during fault injection (reconnects $(json_get "$e" reconnects))"

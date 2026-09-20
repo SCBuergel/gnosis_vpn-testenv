@@ -25,8 +25,13 @@ cell() {
   local label=$1 equal=$2
   connect "$DEST" 15 || { [ "$equal" = 1 ] && verdict T09-impairment-ladder FAIL "$label: connect failed" || record T09-impairment-ladder "$label: connect failed"; return; }
   local s j e
-  s=$(transfer_series "t09-$label" "$TARGET_IP" "$(q 3 2)" "$BYTES" "$CAP" T09-impairment-ladder)
+  # the stream runs FIRST, on the fresh session, so a rung measures the impairment the way T06-realtime-udp's dl arm
+  # does. It used to run after the bulk transfers, and on hoprd 4.1.3 a 3 Mbit/s stream straight after bulk transfers
+  # on the same session showed 9-54 reassembly failures and up to 71 % loss at 0 ms of impairment (fullrun5, fullrun6,
+  # rerun1 2026-09-20), so every equal rung failed for a reason that had nothing to do with latency. That post-bulk
+  # state is now T06-realtime-udp's dl-after-bulk arm.
   in_client "python3 /suite/probes/streamprobe.py --mode dl --host $TARGET_IP --port 8902 --rate-mbit 3 --duration $STREAM_S --size 1200 --iface $WG_IFACE --out ${SUITE_RUN_IN_CLIENT}/t09-$label.json" >/dev/null 2>&1 || true
+  s=$(transfer_series "t09-$label" "$TARGET_IP" "$(q 3 2)" "$BYTES" "$CAP" T09-impairment-ladder)
   j=$(cat "$SUITE_RUN/t09-$label.json" 2>/dev/null || echo '{}'); e=$(log_errors "$LOG_SINCE"); disconnect
   emit_row T09-impairment-ladder cell="$label" equal="$equal" "summary=$s" "stream=$j" "errors=$e"
   local msg="$label: down $(json_get "$s" down_median) up $(json_get "$s" up_median) Mbit/s, complete $(json_get "$s" down_complete)/$(json_get "$s" up_complete), stream loss $(json_get "$j" loss_pct)%, discards $(json_get "$e" frame_discarded), reassembly $(json_get "$e" reassembly_failed), reconnects $(json_get "$e" reconnects) (tunnel-ping timeouts $(json_get "$e" ping_timeouts))"

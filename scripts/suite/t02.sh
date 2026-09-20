@@ -19,5 +19,8 @@ d=dict(zip(k,sys.argv[2:])); d["t"]=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmti
 json.dump(d,open(sys.argv[1],"w"),indent=1); print(json.dumps(d))
 PY
 emit_row T02-build-provenance client="$cv" client_protocol="$cp" hoprd="$hv" hoprd_protocol="$hp" server="$sv"
-if [ -n "$cp" ] && [ -n "$hp" ] && [ "$cp" = "$hp" ]; then verdict T02-build-provenance PASS "client $cv ($cp), hoprd $hv ($hp), server $sv"; else verdict T02-build-provenance WARN "protocol ids: client '$cp' hoprd '$hp' (client $cv, hoprd $hv, server $sv)"; fi
-exit 0
+# a mismatch is the incompatibility this gate exists for; an unreadable id is a WARN because it cannot be judged
+if [ -n "$cp" ] && [ -n "$hp" ] && [ "$cp" = "$hp" ]; then verdict T02-build-provenance PASS "client $cv ($cp), hoprd $hv ($hp), server $sv"
+elif [ -n "$cp" ] && [ -n "$hp" ]; then verdict T02-build-provenance FAIL "protocol id mismatch: client $cv speaks $cp, hoprd $hv speaks $hp; a HOPR packet's frame size is fixed, so mismatched versions misparse rather than refuse to connect"
+else verdict T02-build-provenance WARN "could not read a protocol id: client '$cp' hoprd '$hp' (client $cv, hoprd $hv, server $sv)"; fi
+exit $SUITE_FAILED

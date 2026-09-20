@@ -29,7 +29,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # a bare leading word is accepted and ignored so old call sites (`run.sh all`) keep working
 case "${1:-}" in all|full|suite|"") [ $# -gt 0 ] && shift || true;; -*) :;;
   *) echo "run.sh takes no profile - there is one run. Use --only ${1} to run just that test." >&2; exit 2;; esac
-ONLY=""; SKIP=""; RUN_ID=""; VERY_FAST=0
+ONLY=""; SKIP=""; RUN_ID=""; VERY_FAST=0; export SUITE_MODE=full
 while [ $# -gt 0 ]; do case "$1" in
   --very-fast) VERY_FAST=1;; --fast) export SUITE_FAST=1;; --only) ONLY="$2"; shift;; --skip) SKIP="$2"; shift;;
   --run-id) RUN_ID="$2"; shift;; --ref-cell) export SUITE_REF_CELL="$2"; shift;;
@@ -59,8 +59,9 @@ RUNBOOK="t25 t26 t27 t28 t29 t30 t31 t32"
 
 # --very-fast: every long step cut to the shortest setting that still exercises its mechanism. These are exported as
 # per-test knobs, so an explicit T<NN>_<VAR> in the environment still wins.
+[ "${SUITE_FAST:-0}" = 1 ] && export SUITE_MODE=fast
 if [ "$VERY_FAST" = 1 ]; then
-  export SUITE_FAST=1
+  export SUITE_FAST=1 SUITE_MODE=veryfast
   : "${BYTES:=2000000}" "${CAP:=30}" "${REPS:=1}"; export BYTES CAP REPS
   veryfast() { local v="${1%%=*}"; [ -n "${!v:-}" ] || export "$1"; }
   veryfast T03_N=3
@@ -82,6 +83,9 @@ if [ "$VERY_FAST" = 1 ]; then
 fi
 
 [ -n "$ONLY" ] && TESTS="${ONLY//,/ }"
+# preconditions run first even for --only, unless explicitly skipped: a leftover netem qdisc or a missing liveness-ping
+# alias poisons a single test just as it poisons the run, and t01 costs five seconds
+case " $TESTS " in *" t01 "*) ;; *) case ",$SKIP," in *",t01,"*) ;; *) TESTS="t01 $TESTS";; esac;; esac
 
 # Does this stack have a T03-repeatability-baseline band? Without one, nothing host-dependent is scored.
 export SUITE_BANDS_DIR="${SUITE_BANDS_DIR:-${SUITE_OUT_DIR}/bands}"

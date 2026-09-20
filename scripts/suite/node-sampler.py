@@ -15,7 +15,8 @@ urls = [u for u in a.urls.split(",") if u]
 containers = [c for c in a.containers.split(",") if c]
 KEYS = ("hopr_packets_count", "hopr_mixer_queue_size", "hopr_mixer_averaged_delay", "hopr_session_surb_buffer_estimate",
         "hopr_session_surb_target_buffer", "hopr_packet_rejected_count", "hopr_egress_ring_buffer_dropped",
-        "hopr_surb_balancer_current_buffer_estimate", "hopr_surb_balancer_target", "hopr_surb_balancer_surbs_rate")
+        "hopr_surb_balancer_current_buffer_estimate", "hopr_surb_balancer_current_buffer_target", "hopr_surb_balancer_target",
+        "hopr_surb_balancer_surbs_rate")
 CLK = os.sysconf("SC_CLK_TCK")
 def pid_ticks(pid):
     try:

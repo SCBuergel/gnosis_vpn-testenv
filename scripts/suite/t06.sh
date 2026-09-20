@@ -35,7 +35,7 @@
 # per-arm-session baselines on a stack known to be good.
 #
 # Env: ECHO_RATE=1.5 ECHO_DUR (300 s; fast 120) STREAM_RATE=3 STREAM_DUR (120 s; fast 90) LOSS_MAX (5) STALL_MAX (5) SIZE (1200)
-#      SAMPLE_MIN_PCT (80) PER_ARM_SESSION (1)
+#      SAMPLE_MIN_PCT (80) PER_ARM_SESSION (1) AFTER_BULK (1: a fourth arm, the download stream after bulk transfers)
 source "$(dirname "$0")/lib.sh"
 suite_kind gate
 [ "${1:-}" = "--help" ] && { sed -n '2,23p' "$0"; usage_common; exit 0; }
@@ -118,6 +118,21 @@ for m in ul dl; do
   save_client_log "t06-$m-$r" "$LOG_SINCE"
   arm_disconnect
 done
+# arm 4 — the download stream again, but on a session that has just carried bulk transfers. T09-impairment-ladder
+# used to run its stream this way and every unimpaired cell failed on it (hoprd 4.1.3, client 0.96.3, three runs on
+# 2026-09-20: 9-54 reassembly failures, 16-71 % loss, one reconnect on some rungs) while the fresh-session arm above
+# read 0.2 % loss. Whatever the bulk transfers leave on the session is the defect this arm isolates. AFTER_BULK=0 skips it.
+if [ "${AFTER_BULK:=1}" = 1 ]; then
+  if arm_connect; then
+    transfer_series "t06-bulk" "$TARGET_IP" "$(q "$REPS" 1)" "$BYTES" "$CAP" T06-realtime-udp >/dev/null
+    in_client "python3 /suite/probes/streamprobe.py --mode dl --host $TARGET_IP --port 8902 --rate-mbit $r --duration $STREAM_DUR --size $SIZE --iface $WG_IFACE --out ${SUITE_RUN_IN_CLIENT}/t06-dl-after-bulk-$r.json" >/dev/null 2>&1 || true
+    check "dl-after-bulk-${r}Mbit" "$r" "$STREAM_DUR" "$(cat "$SUITE_RUN/t06-dl-after-bulk-$r.json" 2>/dev/null || echo '{"loss_pct":100,"sent":0}')" "$(log_errors "$LOG_SINCE")"
+    save_client_log "t06-dl-after-bulk-$r" "$LOG_SINCE"
+    arm_disconnect
+  else
+    verdict T06-realtime-udp FAIL "dl-after-bulk-${r}Mbit: connect failed"
+  fi
+fi
 node_sampler_stop; errs=$(log_errors "$LOG_SINCE"); save_client_log t06 "$LOG_SINCE"
 [ "$connected" = 1 ] && disconnect
 emit_row T06-realtime-udp kind=summary "errors=$errs" echo_rate="$ECHO_RATE" echo_dur="$ECHO_DUR" stream_rate="$STREAM_RATE" stream_dur="$STREAM_DUR" per_arm_session="$PER_ARM_SESSION"

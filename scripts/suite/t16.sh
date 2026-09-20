@@ -16,12 +16,12 @@ node_sampler_stop; disconnect
 an=$(python3 - "$SUITE_RUN/samples/t16.jsonl" "$SUITE_RUN/t16-client.csv" <<'PY'
 import sys,json,statistics as st
 rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-def series(i,key):
+def series(i,key,agg=sum):
     out=[]
     for r in rows:
         n=r["nodes"][i] if i<len(r["nodes"]) else {}
         v=[val for k,val in n.items() if k.startswith(key)]
-        out.append(sum(v) if v else None)
+        out.append(agg(v) if v else None)
     return [x for x in out if x is not None]
 res={}
 for i in range(len(rows[0]["nodes"]) if rows else 0):
@@ -31,7 +31,10 @@ for i in range(len(rows[0]["nodes"]) if rows else 0):
     res[f"node{i}"]={"egress_drop_delta":(drop[-1]-drop[0]) if drop else None,"rejected_delta":(rej[-1]-rej[0]) if rej else None,
         "forwarded_pps_max":max((b-a) for a,b in zip(fwd,fwd[1:])) if len(fwd)>1 else None,"sent_pps_max":max((b-a) for a,b in zip(sent,sent[1:])) if len(sent)>1 else None,
         "cpu_pct_mean":round(st.mean(cpu),1) if cpu else None,"cpu_pct_max":max(cpu) if cpu else None}
-tgt=series(0,"hopr_session_surb_target_buffer"); est=series(0,"hopr_session_surb_buffer_estimate")
+# the exit publishes its balancer per session as hopr_surb_balancer_current_buffer_{target,estimate}{session_id=...}
+# (hopr_session_surb_* are the CLIENT's names; reading them here returned None in every run). Max over sessions,
+# not the sum: closed sessions stay in the gauge for hours (R11).
+tgt=series(0,"hopr_surb_balancer_current_buffer_target",max); est=series(0,"hopr_surb_balancer_current_buffer_estimate",max)
 res["exit_session_target_max"]=max(tgt) if tgt else None; res["exit_session_estimate_max"]=max(est) if est else None
 ccpu={}
 for r in rows:

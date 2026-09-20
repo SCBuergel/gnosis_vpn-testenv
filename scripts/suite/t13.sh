@@ -2,10 +2,11 @@
 # T13-mtu-sweep — Tunnel MTU / datagram-size sweep. MTU is not a tuning knob here, it is a mechanism switch: at <=940 B a
 # datagram fits one HOPR packet so no opportunistic second SURB is minted, and the sustained-upload death
 # disappears at identical throughput.
-# Until hoprnet#8392 (gate organic SURB production on the balancer target) is in the tested hoprd, the expected
-# mechanism is: reconnects at MTU 1420 AND 1280, clean at 940. That is asserted as an EXPECTED FAIL with the
-# fix tagged, so the day the fix lands this flips to a green gate deliberately — and a surprise pass before it
-# lands is reported (XPASS), not swallowed.
+# Until 2026-09-20 this was an EXPECTED FAIL tagged with hoprnet#8392 (gate organic SURB production on the balancer
+# target): reconnects at MTU 1420 and 1280, clean at 940. On hoprd 4.1.3 (release/4.1 @ 60269a3) fullrun5 recorded
+# XPASS (no reconnect at any MTU) and T24-sustained-upload ran 900 s at MTU 1420 with 0.0 % loss, so the overflow is not
+# in the tested stack and this is now the plain gate the XFAIL was waiting to become: zero reconnects at every MTU.
+# FIXED_BY is kept as the name of the mechanism, for the day a reconnect at 1420/1280 with 940 clean comes back.
 source "$(dirname "$0")/lib.sh"
 suite_kind gate
 [ "${1:-}" = "--help" ] && { sed -n '2,9p' "$0"; usage_common; exit 0; }
@@ -34,11 +35,11 @@ for l in sys.stdin:
     except Exception: pass
 print(best)' 2>/dev/null || echo 0)
 [ "${m940:-0}" != 0 ] && score_delta T13-mtu-sweep mtu940_down_mbit "$m940" higher_better
-if [ "$small" -eq 0 ] && [ "$big" -gt 0 ]; then
-  xfail T13-mtu-sweep "$FIXED_BY" 1 "organic-SURB overflow reproduced: reconnects at 1420/1280 (${REC[1420]:-0}/${REC[1280]:-0}), clean at 940 (0)"
-elif [ "$small" -eq 0 ] && [ "$big" -eq 0 ]; then
-  xfail T13-mtu-sweep "$FIXED_BY" 0 "no reconnect at ANY mtu (1420 and 1280 clean too)"
+if [ "$small" -eq 0 ] && [ "$big" -eq 0 ]; then
+  verdict T13-mtu-sweep PASS "no reconnect at any mtu [$MTUS]"
+elif [ "$small" -eq 0 ] && [ "$big" -gt 0 ]; then
+  verdict T13-mtu-sweep FAIL "organic-SURB overflow is back ($FIXED_BY): reconnects at 1420/1280 (${REC[1420]:-0}/${REC[1280]:-0}), clean at 940"
 else
-  verdict T13-mtu-sweep FAIL "mechanism broken differently: reconnects 1420=${REC[1420]:-0} 1280=${REC[1280]:-0} 940=${small} — 940 must be clean"
+  verdict T13-mtu-sweep FAIL "reconnects 1420=${REC[1420]:-0} 1280=${REC[1280]:-0} 940=${small}; 940 must be clean, so this is not the known mechanism"
 fi
 exit $SUITE_FAILED
