@@ -93,13 +93,14 @@ Budget ~10 minutes per destination for the full profile (dominated by the two sp
 
 ## Regression suite
 
-[docs/regression-catalogue.md](docs/regression-catalogue.md) describes 32 tests distilled from the 2026-09 throughput and reliability investigations; [scripts/suite/](scripts/suite/README.md) implements them as `scripts/suite/tNN.sh` with a shared library, a profile runner and a version-matrix driver.
+[docs/regression-catalogue.md](docs/regression-catalogue.md) describes 32 tests distilled from the 2026-09 throughput and reliability investigations; [scripts/suite/](scripts/suite/README.md) implements them as pytest tests (`scripts/suite/tests/test_tNN_<name>.py`) with a shared library, and a version-matrix driver.
 
 ```sh
 just up-nobuild                                   # pre-built binaries/images: cluster + server + target + client
 just test t04                                     # one catalogue test against the live stack
-just suite regression --fast                     # smoke | regression | deep | soak | all
-just matrix scripts/suite/cells/example.cells regression   # one stack per version/config cell
+just suite --fast                                 # the one run, shorter durations (--very-fast, --only, --skip, --knob)
+just matrix scripts/suite/cells/example.cells     # one stack per version/config cell
+just suite-selftest                               # offline unit tests of the suite library
 ```
 
 What the suite added to the stack (each is a justfile variable with the old behaviour as default):
@@ -116,7 +117,7 @@ What the suite added to the stack (each is a justfile variable with the old beha
 | `HOPS0_ALSO` | also generate 0-hop `node-N-h0` destinations (T30-hopcount-ab) |
 | `TARGET_IMAGE`, `TARGET_NAME` | the in-cluster traffic target (`just target-start`): sized HTTP download/upload, UDP echo, one-way stream server, two-way call server |
 
-New recipes: `build-client-glibc DIR TAG` and `build-server-glibc BIN TAG` (Ubuntu-based images from cargo builds or an unpacked `.deb`, no Nix), `build-target`, `target-start`/`target-stop`, `client2-start`/`client2-stop`, `up-nobuild`, `cluster-restart`, `test`, `suite`, `matrix`. `gen-config` now saves every extra identity as `extra_id_<i>.*` (keeping `extra_id.*` for the client).
+New recipes: `build-client-glibc DIR TAG` and `build-server-glibc BIN TAG` (Ubuntu-based images from cargo builds or an unpacked `.deb`, no Nix), `build-target`, `target-start`/`target-stop`, `client2-start`/`client2-stop`, `up-nobuild`, `cluster-restart`, `test`, `suite`, `suite-selftest`, `matrix`. `gen-config` now saves every extra identity as `extra_id_<i>.*` (keeping `extra_id.*` for the client).
 
 ## Connectivity smoke-test / drain-tour / traffic scripts
 

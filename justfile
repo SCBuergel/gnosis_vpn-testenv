@@ -726,19 +726,23 @@ _suite-env:
     export CLUSTER_ENV="{{CLUSTER_ENV}}" CLUSTER_LATENCY="{{CLUSTER_LATENCY}}" GVPN_CLIENT_DIR="{{GVPN_CLIENT_DIR}}" GVPN_SERVER_DIR="{{GVPN_SERVER_DIR}}"
     ENV
 
-# Run one catalogue test against the live stack: just test t04 [ARGS...]
+# Run one catalogue test against the live stack (t01 is not forced in front): just test t04 [--fast] [--knob T04_REPS=1]
 test name *args:
     #!/usr/bin/env bash
     set -euo pipefail
     eval "$(just _suite-env)"
-    exec "{{justfile_directory()}}/scripts/suite/{{name}}.sh" {{args}}
+    exec python3 "{{justfile_directory()}}/scripts/suite/run.py" --only "{{name}}" --no-preconditions {{args}}
 
-# Run the regression suite (one run, every test; --fast, --very-fast, --only, --skip) against the live stack; results in SUITE_OUT_DIR/<run-id>/
+# Run the regression suite (one run, every test; --fast, --very-fast, --only, --skip, --knob) against the live stack; results in SUITE_OUT_DIR/<run-id>/
 suite *args:
     #!/usr/bin/env bash
     set -euo pipefail
     eval "$(just _suite-env)"
-    exec "{{justfile_directory()}}/scripts/suite/run.sh" {{args}}
+    exec python3 "{{justfile_directory()}}/scripts/suite/run.py" {{args}}
+
+# Offline self-tests of the suite library (no stack needed)
+suite-selftest:
+    python3 -m pytest "{{justfile_directory()}}/scripts/suite/selftest" -q
 
 # Bring the stack up without building (pre-built binaries and images), including target and client
 up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config target-start clients-start
@@ -747,11 +751,12 @@ up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config tar
 # Restart only the cluster (new HOPRD_BIN / CLUSTER_ENV / CLUSTER_LATENCY), regenerate config, restart the client
 cluster-restart: client-stop cluster-stop cluster-start cluster-wait gen-config client-start
 
-# Run the version/config matrix from a cells file (see scripts/suite/matrix.sh --help)
-matrix cells profile="regression" *args:
+# Run the suite across version/config cells from a cells file (see scripts/suite/matrix.py --help)
+matrix cells *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    exec "{{justfile_directory()}}/scripts/suite/matrix.sh" "{{cells}}" "{{profile}}" {{args}}
+    eval "$(just _suite-env)"
+    exec python3 "{{justfile_directory()}}/scripts/suite/matrix.py" "{{cells}}" {{args}}
 
 # ─── Scripts ─────────────────────────────────────────────────────────────────
 
