@@ -4,18 +4,18 @@ Scripted form of [docs/regression-catalogue.md](../../docs/regression-catalogue.
 
 ```sh
 just up-nobuild                  # or: just up   — stack + target + clients
-just suite                       # THE run: every test, one order (t01 … t24); T03 writes the band on the way
+just suite                       # THE run: every test, one order (t01 … t24); T03 records repeatability on the way
 just suite --fast                # the catalogue's shorter durations; --very-fast is more aggressive still
 just suite --only t09,t22        # one or a few tests (t01 still runs first); --skip tNN drops one; T22_LADDER="1 2" is a per-test knob
 just test t04                    # one test, outside the runner
-just matrix scripts/suite/cells/example.cells all --fast --ref-cell A-0961-hoprd412
+just matrix scripts/suite/cells/example.cells all --fast
 ```
 
 There is one run and no profiles: `run.sh` executes t01 … t24 in a fixed order every time, and a run id (`--run-id`) that already holds results is refused rather than appended to. T05-loaded-latency sits fifth and T06-realtime-udp sixth, right after the T04-fixed-throughput reference, because their numbers are only comparable on a host that has not been loaded for an hour first.
 
 **Three kinds, scored differently.** Each `tNN.sh` declares `suite_kind gate|diagnostic|runbook`. Only a **gate** can fail a run; a **diagnostic** emits `RECORDED` and never scores; **runbook** items (fleet, investigation, tooling: t25 t26 t27 t28 t29 t30 t31 t32) are not in the run and are started explicitly with `just test tNN`. A `FAIL` raised by a non-gate is downgraded to `WARN`, so tooling can never pad or redden a summary.
 
-**Relative scoring.** Throughput and latency are host artifacts on a single-host stack, so `score_delta` scores them against the last stored value of the same metric on the same stack (normally the previous run), using the tolerance from T03-repeatability-baseline's band, with a separate history per mode (full, `--fast`, `--very-fast`); `--ref-cell` is only for the explicit A/B path of `matrix.sh`. Absolute pass/fail is reserved for discrete assertions. Without a T03-repeatability-baseline record for the stack the suite runs and records everything but refuses to score those numbers, and says so in the run header.
+**Absolute thresholds.** Every number a gate holds a measurement against is a named knob with a default calibrated on the reference stack (`DOWN_MIN_MBIT=7`, `LOSS_MAX=5`, `RECOVER_MAX=90`, ...), listed with its calibration in the catalogue's threshold table; nothing is compared with a previous run. `assert_min` / `assert_max` in `lib.sh` print the knob next to the value. T03-repeatability-baseline records how far the stack's own numbers wander so the headroom can be judged.
 
 **Expected failures** use `xfail TEST FIXED_BY HOLDS msg`: a known defect with no fix in the tested stack is `XFAIL` tagged with the fix, and a surprise pass is `XPASS`, never swallowed. No test carries one at the moment (T13-mtu-sweep did, for `hoprnet#8392`, until the mechanism left the tested stack).
 

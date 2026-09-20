@@ -30,6 +30,4 @@ ks=set(k for r in rows for k in r.get("cpu_pct",{})); print(json.dumps({k: round
 done
 disconnect; emit_row T18-capacity-ceiling kind=summary knee_mbit="$knee" watchdog_reconnects_above_knee="${wd_above:-0}"
 record T18-capacity-ceiling "ceiling: last clean rung ${knee} Mbit/s of ladder [$LADDER]; watchdog reconnects above the knee: ${wd_above:-0} (see rows for per-node CPU)"
-# the ceiling itself is host-dependent, so it is scored as a delta against the reference cell, not absolutely
-score_delta T18-capacity-ceiling capacity_knee_mbit "$knee" higher_better
 exit 0

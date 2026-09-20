@@ -10,7 +10,7 @@
 source "$(dirname "$0")/lib.sh"
 suite_kind gate
 [ "${1:-}" = "--help" ] && { sed -n '2,9p' "$0"; usage_common; exit 0; }
-: "${MTUS:=1420 1280 940}" "${STREAM_S:=$(q 120 120)}" "${FIXED_BY:=hoprnet#8392}"
+: "${MTUS:=1420 1280 940}" "${STREAM_S:=$(q 120 120)}" "${FIXED_BY:=hoprnet#8392}" "${MTU940_DOWN_MIN_MBIT:=6}"
 suite_init; require_target
 declare -A REC
 for mtu in $MTUS; do
@@ -24,8 +24,9 @@ for mtu in $MTUS; do
   record T13-mtu-sweep "mtu $eff: down $(json_get "$s" down_median) up $(json_get "$s" up_median) Mbit/s, stream loss $(json_get "$j" loss_pct)%, reconnects ${REC[$mtu]} (tunnel-ping timeouts $(json_get "$e" ping_timeouts))"
 done
 big=$(( ${REC[1420]:-0} + ${REC[1280]:-0} )); small=${REC[940]:-0}
-# throughput must not depend on MTU — the point is the same speed with a different failure mode.
-# Scored longitudinally from the recorded 940 rung (the clean one), against the previous run.
+# throughput must not depend on MTU: the point is the same speed with a different failure mode. The 940 rung's
+# download median is held against MTU940_DOWN_MIN_MBIT (6): it measured 12.3 Mbit/s on the reference stack, and 6
+# sits under T04's floor of 7 because a 940 B MTU carries about a third more packets per byte.
 m940=$(grep -a '"test": "T13-mtu-sweep"' "$SUITE_RUN/rows.jsonl" | python3 -c 'import sys,json
 best=0
 for l in sys.stdin:
@@ -34,7 +35,7 @@ for l in sys.stdin:
         if str(r.get("mtu"))=="940" and isinstance(r.get("summary"),dict): best=r["summary"].get("down_median") or 0
     except Exception: pass
 print(best)' 2>/dev/null || echo 0)
-[ "${m940:-0}" != 0 ] && score_delta T13-mtu-sweep mtu940_down_mbit "$m940" higher_better
+[ "${m940:-0}" != 0 ] && assert_min T13-mtu-sweep "download median at mtu 940" "$m940" Mbit/s MTU940_DOWN_MIN_MBIT
 if [ "$small" -eq 0 ] && [ "$big" -eq 0 ]; then
   verdict T13-mtu-sweep PASS "no reconnect at any mtu [$MTUS]"
 elif [ "$small" -eq 0 ] && [ "$big" -gt 0 ]; then

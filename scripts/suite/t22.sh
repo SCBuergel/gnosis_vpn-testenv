@@ -12,8 +12,10 @@
 # Per-client throughput is EXPECTED to fall as clients are added — they share one exit and one host — so nothing
 # is asserted per client beyond completion. Fairness (slowest client over the rung mean) is RECORDED, not gated:
 # the starvation signature seen on the 2026-09-09/10 fleet ladders was zero-byte transfers, which (a) catches, and
-# a fairness bound taken from one ladder would be a number we cannot justify. The top rung's aggregate is
-# delta-scored against the previous run of this stack, which is where a gradual concurrency regression shows.
+# a fairness bound taken from one ladder would be a number we cannot justify. The top rung's aggregate is held
+# against the absolute floor AGG_MIN_MBIT (8): it measured 16.1 Mbit/s at n=4 on the reference stack, and 8 is
+# below a single client's rate, so it only fires on a collapse; the completion rule and the one-sided drop rule
+# do the finer work.
 # Every client is WARMED before the measured transfer. Each rung connects its clients fresh, so without a warm-up
 # every measured transfer is a cold start and the test measures the SURB ramp (T07-cold-start) instead of concurrency --
 # observed 2026-09-17, when a single client moved 0 bytes at n=1 while four together moved 8.2 Mbit/s. Set
@@ -24,7 +26,7 @@
 source "$(dirname "$0")/lib.sh"
 suite_kind gate
 [ "${1:-}" = "--help" ] && { sed -n '2,20p' "$0"; usage_common; exit 0; }
-: "${LADDER:=1 2 4}" "${TOL_PCT:=25}" "${WARMUP:=1}" "${WARMUP_BYTES:=500000}"
+: "${LADDER:=1 2 4}" "${TOL_PCT:=25}" "${WARMUP:=1}" "${WARMUP_BYTES:=500000}" "${AGG_MIN_MBIT:=8}"
 suite_init; require_target
 
 avail=$(clients_running)
@@ -133,6 +135,6 @@ if [ "$fail" = 0 ]; then
   else
     verdict T22-concurrent-clients FAIL "aggregate collapses with concurrency: ${summary}Mbit/s (${worst_pair} drops ${worst_drop}%, tolerance ${TOL_PCT}%)"
   fi
-  score_delta T22-concurrent-clients concurrent_aggregate_mbit "${AGG[${rungs##* }]}" higher_better
+  assert_min T22-concurrent-clients "aggregate at n=${rungs##* }" "${AGG[${rungs##* }]}" Mbit/s AGG_MIN_MBIT
 fi
 exit $SUITE_FAILED

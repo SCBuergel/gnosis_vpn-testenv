@@ -93,7 +93,6 @@ check() { # check label rate dur json errs
   else
     verdict T06-realtime-udp FAIL "$l: ${why} (p99 ${p99} ms, sample ${pct}% of expected, no reconnect)"
   fi
-  score_delta T06-realtime-udp "delivered_pct_${l}" "$(python3 -c "print(round(100-${loss},2))")" higher_better
 }
 
 node_sampler_start t06 1

@@ -27,11 +27,6 @@ q() { if [ "${SUITE_FAST}" = "1" ]; then echo "$2"; else echo "$1"; fi; }
 : "${CLIENT2:=gnosis_vpn-client-2}"       # second client (T19-background-load/T21-passive-observer), optional
 : "${CLIENT_COUNT:=1}"                    # client containers started by `just clients-start` (T22-concurrent-clients)
 : "${SURB_RAMP_WAIT:=25}"                 # seconds after connect before measuring; see the note on connect()
-# Widest usable scoring tolerance. T03-repeatability-baseline measures the band on the stack under test, so a BROKEN stack measures a
-# huge spread and buys itself a tolerance nothing can fail against: on the 2026-09-17 old-version run the band
-# came out at +-279 % and a delivery collapse from 99.7 % to 17.3 % scored PASS. A band wider than this is
-# evidence the stack is unstable, not licence to ignore regressions, so scoring clamps to it and says so.
-: "${BAND_MAX_PCT:=50}"
 : "${DEST:=node-0}"                       # destination id in client.toml (exit-adjacent node)
 : "${TARGET_NAME:=gnosis_vpn-target}"     # in-cluster traffic target container
 : "${DOCKER_NETWORK:=gnosis-vpn-testenv}"
@@ -42,14 +37,6 @@ q() { if [ "${SUITE_FAST}" = "1" ]; then echo "$2"; else echo "$1"; fi; }
 : "${SUITE_OUT_DIR:=/tmp/gnosis_vpn-testenv-suite}"
 : "${SUITE_RUN:=${SUITE_OUT_DIR}/latest}"
 : "${SUITE_CELL:=}"                       # label of the version/config cell, set by matrix.sh
-: "${SUITE_REF_CELL:=}"                   # only used by the explicit A/B path (matrix.sh); normally empty
-: "${SUITE_RUN_GROUP:=default}"           # only used by the explicit A/B path
-: "${SUITE_BANDS_DIR:=${SUITE_OUT_DIR}/bands}"   # T03-repeatability-baseline bands, keyed on stack provenance
-: "${SUITE_REFS_DIR:=${SUITE_OUT_DIR}/refs}"     # per-metric reference values within a run group
-# SUITE_MODE=full|fast|veryfast (run.sh sets it; a test run on its own derives it from SUITE_FAST). Delta history is
-# kept PER MODE: a --very-fast T13 read 8.6 Mbit/s from a 2 MB transfer against 12.3 from the full run's 10 MB and
-# FAILed by -30 % (vfreview2, 2026-09-20), and the smoke number would then have become the next full run's reference.
-: "${SUITE_MODE:=$([ "${SUITE_FAST}" = 1 ] && echo fast || echo full)}"
 : "${DEADMAN:=900}"                       # armed disconnect fires after this many seconds
 : "${CONNECT_TIMEOUT:=240}"
 # transfer size and cap: a single-host localcluster moves a few Mbit/s, so 10 MB / 90 s completes where the
@@ -152,9 +139,14 @@ xfail() {
 }
 
 # ---------------------------------------------------------------------------
-# stack identity, T03-repeatability-baseline bands, delta scoring
+# stack identity and absolute thresholds
 # ---------------------------------------------------------------------------
-# stack_key — stable id of the software+config under test, so a T03-repeatability-baseline band belongs to one stack only
+# Host-dependent numbers (throughput, latency) were scored as deltas against the previous run until 2026-09-20.
+# That ratcheted (a regression that lasted two runs became the reference), mixed run modes, and once let a
+# delivery collapse pass under a +-279 % band. Every gate now holds an ABSOLUTE floor or ceiling, a named knob
+# with a default calibrated on the reference stack (hoprd 4.1.3, client 0.96.3, server 0.7.0, one 8-vCPU host)
+# and documented in the catalogue's threshold table. assert_min / assert_max print the knob next to the value.
+# stack_key — stable id of the software+config under test (provenance in messages and rows)
 stack_key() {
   if [ -n "${SUITE_STACK_KEY:-}" ]; then echo "${SUITE_STACK_KEY}"; return; fi
   local c h s
@@ -167,58 +159,17 @@ stack_key() {
   echo "${SUITE_STACK_KEY}"
 }
 
-band_file() { echo "${SUITE_BANDS_DIR}/$(stack_key).json"; }
-have_band() { [ -s "$(band_file)" ]; }
-band_get() { python3 -c 'import sys,json; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$(band_file)" "$1" 2>/dev/null; }
-
-# band_write JSON — T03-repeatability-baseline stores the repeatability band for this stack
-band_write() {
-  mkdir -p "${SUITE_BANDS_DIR}"
-  python3 -c 'import sys,json,time
-d=json.loads(sys.argv[2]); d["stack_key"]=sys.argv[3]; d["recorded"]=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())
-json.dump(d, open(sys.argv[1],"w"), indent=1)' "$(band_file)" "$1" "$(stack_key)"
-  suite_log "T03-repeatability-baseline band written for stack $(stack_key): $1"
+# assert_min TEST WHAT VALUE UNIT KNOB — PASS iff VALUE >= ${KNOB}; assert_max — PASS iff VALUE <= ${KNOB}.
+# The verdict names the knob so a reader can see what the number was held against and where to tune it.
+assert_min() {
+  local t=$1 what=$2 v=$3 unit=$4 knob=$5 lim="${!5}"
+  python3 -c "import sys; sys.exit(0 if float('${v:-0}' or 0) >= float('$lim') else 1)" \
+    && verdict "$t" PASS "$what ${v} ${unit} >= ${knob}=${lim}" || verdict "$t" FAIL "$what ${v} ${unit} < ${knob}=${lim}"
 }
-
-# score_delta TEST METRIC VALUE [higher_better|lower_better] — longitudinal scoring for host-dependent numbers.
-# The suite runs one stack at a time (versions sequentially), so a number is judged against the LAST STORED
-# value for that metric — the previous run, usually the previous version — not against a sibling cell.
-# History is append-only in SUITE_REFS_DIR/history/<metric>.jsonl so drift stays visible.
-# Without a T03-repeatability-baseline band for this stack there is no defensible tolerance, so the value is RECORDED, never scored.
-score_delta() {
-  local t="$1" m="$2" v="$3" dir="${4:-higher_better}"
-  local suffix=""; [ "${SUITE_MODE}" = full ] || suffix="@${SUITE_MODE}"
-  local hist="${SUITE_REFS_DIR}/history/${m}${suffix}.jsonl"
-  mkdir -p "$(dirname "$hist")"
-  local prev; prev=$(tail -1 "$hist" 2>/dev/null || true)
-  # append this observation first so the history is complete even when it cannot be scored
-  python3 -c 'import sys,json,time
-json.dump({"t":round(time.time(),1),"stack_key":sys.argv[2],"cell":sys.argv[3],"metric":sys.argv[4],"value":float(sys.argv[5])},
-          open(sys.argv[1],"a")); open(sys.argv[1],"a").write("\n")' \
-    "$hist" "$(stack_key)" "${SUITE_CELL:-default}" "$m" "$v" 2>/dev/null || true
-  if ! have_band; then record "$t" "${m}=${v} (unscored: no T03-repeatability-baseline for stack $(stack_key))"; return 0; fi
-  if [ -z "$prev" ]; then record "$t" "${m}=${v} (first observation for this metric in ${SUITE_MODE} mode, stored as the baseline)"; return 0; fi
-  local tol out raw_tol clamped=0; raw_tol=$(band_get mde_pct); raw_tol=${raw_tol:-20}; tol=$raw_tol
-  if python3 -c "import sys; sys.exit(0 if float('$raw_tol') > float('$BAND_MAX_PCT') else 1)"; then
-    tol=$BAND_MAX_PCT; clamped=1
-  fi
-  out=$(python3 - "$m" "$v" "$prev" "$tol" "$dir" "$(stack_key)" <<'SD'
-import sys, json
-m, v, prev, tol, d, key = sys.argv[1], float(sys.argv[2]), json.loads(sys.argv[3]), float(sys.argv[4]), sys.argv[5], sys.argv[6]
-ref = prev["value"]
-if ref == 0:
-    print("RECORDED|%s=%s (previous value was zero)" % (m, v)); raise SystemExit
-chg = (v - ref) / ref * 100.0
-worse = chg < -tol if d == "higher_better" else chg > tol
-same_stack = prev.get("stack_key") == key
-against = "the previous run of this same stack" if same_stack else ("the previous run (stack %s)" % prev.get("stack_key"))
-print("%s|%s=%.3f vs %.3f from %s (%+.1f%%, band +-%.0f%% from T03-repeatability-baseline)" % ("FAIL" if worse else "PASS", m, v, ref, against, chg, tol))
-SD
-)
-  [ -z "$out" ] && { record "$t" "${m}=${v} (delta scoring failed)"; return 0; }
-  local st="${out%%|*}" msg="${out#*|}"
-  [ "$clamped" = 1 ] && msg="${msg} [band clamped: T03-repeatability-baseline measured +-${raw_tol}%, above BAND_MAX_PCT ${BAND_MAX_PCT}% - the baseline stack was unstable, so this was scored at the cap]"
-  if [ "$st" = "RECORDED" ]; then record "$t" "$msg"; else verdict "$t" "$st" "$msg"; fi
+assert_max() {
+  local t=$1 what=$2 v=$3 unit=$4 knob=$5 lim="${!5}"
+  python3 -c "import sys; sys.exit(0 if float('${v:-0}' or 0) <= float('$lim') else 1)" \
+    && verdict "$t" PASS "$what ${v} ${unit} <= ${knob}=${lim}" || verdict "$t" FAIL "$what ${v} ${unit} > ${knob}=${lim}"
 }
 
 # stats_json n1 n2 ... -> {"n":..,"min":..,"median":..,"mean":..,"max":..,"stdev":..}
@@ -606,6 +557,6 @@ usage_common() {
   cat <<USAGE
 Common environment: CLIENT=${CLIENT} DEST=${DEST} TARGET_NAME=${TARGET_NAME} SUITE_RUN=${SUITE_RUN}
   SUITE_FAST=${SUITE_FAST} (1 shortens durations)  DEADMAN=${DEADMAN}s  BYTES=${BYTES} CAP=${CAP}s REPS=${REPS}
-Run through 'just suite <profile>' or 'just test <tNN>' so the stack variables are exported.
+Run through 'just suite' or 'just test <tNN>' so the stack variables are exported.
 USAGE
 }

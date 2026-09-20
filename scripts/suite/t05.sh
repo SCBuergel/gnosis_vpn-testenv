@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # T05-loaded-latency — Loaded latency (bufferbloat) and parallel-flow scaling (gate): in-tunnel ping idle, during a saturating
 # download, during a saturating upload; then N ∈ {1,3,6} parallel downloads/uploads. Env: PHASE_S (default 30).
-# Scoring: an absolute loaded-RTT threshold is meaningless on a shared host, so the p95s are scored as a DELTA
-# against the previous run of this same stack, inside T03-repeatability-baseline's band. Two hard assertions:
-#   (a) loaded RTT p95 must not regress beyond the band, in either direction;
+# Scoring: the loaded p95 RTTs are held against absolute ceilings DOWN_P95_MAX_MS / UP_P95_MAX_MS (1500 / 2500).
+# Calibration: three full runs on the reference stack measured download p95 359, 537 and 1076 ms and upload p95
+# 1124, 1153 and 1746 ms; the fleet's bufferbloat finding was 2-4 s and a parallel upload at 8.9 s. Assertions:
+#   (a) loaded RTT p95 in each direction stays under its ceiling;
 #   (b) every parallel flow completes within CAP, and the aggregate must not fall as N rises.
 # The aggregate is computed from the bytes curl actually received, not from N x BYTES: three full runs read
 # exactly 5.33 Mbit/s at N=6, which is 6 x 10 MB x 8 / 90 s, the cap and not a throughput. A flow that hits CAP
@@ -14,7 +15,7 @@
 source "$(dirname "$0")/lib.sh"
 suite_kind gate
 [ "${1:-}" = "--help" ] && { sed -n '2,9p' "$0"; usage_common; exit 0; }
-: "${PHASE_S:=$(q 30 15)}" "${LOADED_P95_MAX:=1000}" "${PARALLEL:=1 3 6}"
+: "${PHASE_S:=$(q 30 15)}" "${DOWN_P95_MAX_MS:=1500}" "${UP_P95_MAX_MS:=2500}" "${PARALLEL:=1 3 6}"
 suite_init; require_target
 connect "$DEST" 15 || { verdict T05-loaded-latency FAIL "connect failed"; exit 1; }
 ping_phase() { in_client "ping -c $PHASE_S -i 1 -W 3 $TARGET_IP 2>/dev/null | grep -oE 'time=[0-9.]+' | cut -d= -f2" | tr '\n' ' '; }
@@ -54,6 +55,6 @@ elif [ "$agg_ok" = 1 ]; then
 else
   verdict T05-loaded-latency FAIL "parallel aggregate fell as N rose over [$PARALLEL] although every flow completed; see the parallel rows"
 fi
-score_delta T05-loaded-latency loaded_rtt_p95_download_ms "${dp:-0}" lower_better
-score_delta T05-loaded-latency loaded_rtt_p95_upload_ms   "${up:-0}" lower_better
+assert_max T05-loaded-latency "loaded RTT p95 during download" "${dp:-0}" ms DOWN_P95_MAX_MS
+assert_max T05-loaded-latency "loaded RTT p95 during upload"   "${up:-0}" ms UP_P95_MAX_MS
 exit $SUITE_FAILED

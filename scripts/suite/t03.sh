@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# T03-repeatability-baseline — Repeatability baseline (PREREQUISITE, kind: gate-support). N unchanged warm T04-fixed-throughput cells back to back on
-# one stack; reports spread and writes the band this stack's delta scoring uses (SUITE_BANDS_DIR/<stack_key>.json).
-# Until a stack has this record, run.sh records host-dependent numbers instead of scoring them.
-# Env: N (default 10, fast 5). No pass/fail of its own — it produces the threshold every other test is judged by.
+# T03-repeatability-baseline — Repeatability baseline (diagnostic). N unchanged warm T04-fixed-throughput cells back to back on
+# one stack; records medians, spread and the minimum detectable effect at REPS transfers (mde_pct), so the headroom of
+# the suite's absolute thresholds can be judged for this stack. Flags UNSTABLE above UNSTABLE_PCT.
+# Env: N (default 10, fast 5) UNSTABLE_PCT (50). No pass/fail of its own.
 source "$(dirname "$0")/lib.sh"
 suite_kind diagnostic
 [ "${1:-}" = "--help" ] && { sed -n '2,5p' "$0"; usage_common; exit 0; }
-: "${N:=$(q 10 5)}"
+: "${N:=$(q 10 5)}" "${UNSTABLE_PCT:=50}"
 suite_init; require_target
 d=(); u=()
 for i in $(seq 1 "$N"); do
@@ -24,13 +24,12 @@ m=[x for x in (mde(ds), mde(us)) if x is not None]
 print(json.dumps({"n":ds.get("n",0),"down_median":ds.get("median"),"down_stdev":ds.get("stdev"),
  "up_median":us.get("median"),"up_stdev":us.get("stdev"),
  "mde_pct":max(m) if m else 20, "reps_assumed":reps}))' "$ds" "$us" "$REPS")
-band_write "$band"
 emit_row T03-repeatability-baseline kind=summary "down=$ds" "up=$us" "band=$band"
 mde=$(json_get "$band" mde_pct)
-record T03-repeatability-baseline "n=$N warm on stack $(stack_key): down median $(json_get "$ds" median) stdev $(json_get "$ds" stdev); up median $(json_get "$us" median) stdev $(json_get "$us" stdev); band +-${mde}% at REPS=$REPS"
-# A band this wide is a finding about the stack, not a licence to ignore regressions. Say so here as well as at
-# the point of use: on the 2026-09-17 old-version run the band came out at +-279 % and every delta gate passed.
-if python3 -c "import sys; sys.exit(0 if float('${mde:-0}') > float('$BAND_MAX_PCT') else 1)"; then
-  record T03-repeatability-baseline "UNSTABLE BASELINE: measured band +-${mde}% exceeds BAND_MAX_PCT ${BAND_MAX_PCT}% — this stack cannot repeat its own throughput, so delta scoring is clamped to +-${BAND_MAX_PCT}% and every delta result this run is weak evidence. Treat absolute assertions as the real signal."
+record T03-repeatability-baseline "n=$N warm on stack $(stack_key): down median $(json_get "$ds" median) stdev $(json_get "$ds" stdev); up median $(json_get "$us" median) stdev $(json_get "$us" stdev); minimum detectable effect +-${mde}% at REPS=$REPS"
+# A spread this wide is a finding about the stack: the 2026-09-17 old-version run measured +-279 %, and no
+# threshold with sane headroom can be trusted on a stack that cannot repeat its own numbers.
+if python3 -c "import sys; sys.exit(0 if float('${mde:-0}') > float('$UNSTABLE_PCT') else 1)"; then
+  record T03-repeatability-baseline "UNSTABLE BASELINE: minimum detectable effect +-${mde}% exceeds UNSTABLE_PCT ${UNSTABLE_PCT}%; this stack cannot repeat its own throughput, so read every threshold verdict in this run as weak evidence"
 fi
 exit 0

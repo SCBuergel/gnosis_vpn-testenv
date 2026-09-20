@@ -2,12 +2,12 @@
 #
 # run.sh - run the regression suite (docs/regression-catalogue.md) against the live stack.
 #
-#   run.sh [--very-fast] [--fast] [--only tNN,tNN] [--skip tNN,...] [--run-id ID] [--ref-cell NAME]
+#   run.sh [--very-fast] [--fast] [--only tNN,tNN] [--skip tNN,...] [--run-id ID]
 #
 # THERE IS ONE RUN. Every test runs, in one order, every time — there are no profiles to pick between, because
 # a profile you can choose is a profile someone forgets to choose, and coverage then depends on which name was
 # typed. Make the run shorter instead:
-#   --very-fast        aggressive overrides on every long step; targets well under 30 minutes for the whole suite
+#   --very-fast        aggressive overrides on every long step; the whole suite takes about 50 minutes (measured 2026-09-20)
 #   --fast       the catalogue's own shortened durations (less aggressive than --very-fast)
 #   --only/--skip ad hoc, for working on one test
 #   T<NN>_<VAR>   per-test knob, e.g. T09_STREAM_S=10 T23_DUR=150 — overrides --very-fast
@@ -15,13 +15,10 @@
 # Runbook items (fleet, investigation, tooling: t25 t26 t27 t28 t29 t30 t31 t32) are not in the run; run them
 # explicitly with `just test tNN`.
 #
-# Scoring. Only a *gate* can fail a run. The suite tests ONE stack at a time (versions are run sequentially),
-# so host-dependent numbers are scored against the last stored value for that metric — the previous run,
-# usually the previous version — inside T03-repeatability-baseline's band. Without a T03-repeatability-baseline record for this stack the suite still runs
-# and records everything but refuses to score, and says so. t03 runs third in every run, so the record exists from
-# the first full run on; `--only t01,t02,t03` creates it alone.
-# --ref-cell exists only for the explicit A/B path (a newly added test with no stored history yet).
-#
+# Scoring. Only a *gate* can fail a run. Every threshold is absolute and named (DOWN_MIN_MBIT=7, LOSS_MAX=5, ...),
+# calibrated on the reference stack and listed in the catalogue's threshold table; nothing is compared with a
+# previous run. T03-repeatability-baseline records how far this stack's own numbers wander, so the headroom of
+# those thresholds can be judged.
 # Results: SUITE_OUT_DIR/<run-id>/ (rows.jsonl, verdicts.jsonl, provenance.json, summary.csv, logs/, samples/).
 set -euo pipefail
 export LC_ALL=C
@@ -29,10 +26,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # a bare leading word is accepted and ignored so old call sites (`run.sh all`) keep working
 case "${1:-}" in all|full|suite|"") [ $# -gt 0 ] && shift || true;; -*) :;;
   *) echo "run.sh takes no profile - there is one run. Use --only ${1} to run just that test." >&2; exit 2;; esac
-ONLY=""; SKIP=""; RUN_ID=""; VERY_FAST=0; export SUITE_MODE=full
+ONLY=""; SKIP=""; RUN_ID=""; VERY_FAST=0
 while [ $# -gt 0 ]; do case "$1" in
   --very-fast) VERY_FAST=1;; --fast) export SUITE_FAST=1;; --only) ONLY="$2"; shift;; --skip) SKIP="$2"; shift;;
-  --run-id) RUN_ID="$2"; shift;; --ref-cell) export SUITE_REF_CELL="$2"; shift;;
+  --run-id) RUN_ID="$2"; shift;;
   --help|-h) sed -n '3,20p' "$0"; exit 0;; *) echo "unknown arg $1" >&2; exit 2;; esac; shift; done
 : "${SUITE_OUT_DIR:=/tmp/gnosis_vpn-testenv-suite}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)${SUITE_CELL:+-$SUITE_CELL}}"
@@ -47,7 +44,7 @@ fi
 mkdir -p "${SUITE_RUN}"; ln -sfn "${SUITE_RUN}" "${SUITE_OUT_DIR}/latest"
 
 # ONE list, one order. Placement is load-bearing in three places:
-#   - t03 runs third so this run is scored against a band measured on this stack now, not a stale one;
+#   - t03 runs third so the stack's own repeatability is on record before any gate reads a number;
 #   - t05 runs fifth, right after the t04 throughput reference, because its loaded-RTT numbers are only
 #     comparable on a host that has not already been hammered for an hour;
 #   - t06 real-time UDP runs sixth, right beside t05, for the same reason.
@@ -59,9 +56,8 @@ RUNBOOK="t25 t26 t27 t28 t29 t30 t31 t32"
 
 # --very-fast: every long step cut to the shortest setting that still exercises its mechanism. These are exported as
 # per-test knobs, so an explicit T<NN>_<VAR> in the environment still wins.
-[ "${SUITE_FAST:-0}" = 1 ] && export SUITE_MODE=fast
 if [ "$VERY_FAST" = 1 ]; then
-  export SUITE_FAST=1 SUITE_MODE=veryfast
+  export SUITE_FAST=1
   : "${BYTES:=2000000}" "${CAP:=30}" "${REPS:=1}"; export BYTES CAP REPS
   veryfast() { local v="${1%%=*}"; [ -n "${!v:-}" ] || export "$1"; }
   veryfast T03_N=3
@@ -87,17 +83,9 @@ fi
 # alias poisons a single test just as it poisons the run, and t01 costs five seconds
 case " $TESTS " in *" t01 "*) ;; *) case ",$SKIP," in *",t01,"*) ;; *) TESTS="t01 $TESTS";; esac;; esac
 
-# Does this stack have a T03-repeatability-baseline band? Without one, nothing host-dependent is scored.
-export SUITE_BANDS_DIR="${SUITE_BANDS_DIR:-${SUITE_OUT_DIR}/bands}"
 KEY=$(SUITE_RUN="$SUITE_RUN" bash -c "source '${HERE}/lib.sh' >/dev/null 2>&1; stack_key" 2>/dev/null || echo unknown)
-if [ -s "${SUITE_BANDS_DIR}/${KEY}.json" ] || case " $TESTS " in *" t03 "*) true;; *) false;; esac; then
-  BAND_NOTE="T03-repeatability-baseline band present for stack ${KEY}"
-else
-  BAND_NOTE="NO T03-repeatability-baseline BAND for stack ${KEY} - host-dependent gates are RECORDED, not scored. t03 is in the run, so this resolves itself after one full run."
-fi
-{ echo "run_id=$RUN_ID cell=${SUITE_CELL:-} ref_cell=${SUITE_REF_CELL:-} fast=${VERY_FAST} fast=${SUITE_FAST:-0} started=$(date -u +%FT%TZ)"
-  echo "tests=$TESTS"; echo "stack_key=$KEY"; echo "$BAND_NOTE"; } | tee "${SUITE_RUN}/run.txt"
-echo "$BAND_NOTE" | grep -q '^NO T03-repeatability-baseline' && echo "!! ${BAND_NOTE}" >&2 || true
+{ echo "run_id=$RUN_ID cell=${SUITE_CELL:-} very_fast=${VERY_FAST} fast=${SUITE_FAST:-0} started=$(date -u +%FT%TZ)"
+  echo "tests=$TESTS"; echo "stack_key=$KEY"; } | tee "${SUITE_RUN}/run.txt"
 
 fail=0
 for t in $TESTS; do
