@@ -24,7 +24,11 @@ A constant-bitrate (CBR) UDP **download** above the path's ~10-13 Mbit/s capacit
 | 12 Mbit/s | no | 52 % | 19918 |
 | 15 Mbit/s | **yes (1)** | 57-82 % | ~19000-30000 |
 
-Mechanism, best current understanding (to be confirmed by the deep dive below): the download saturates the server→client direction and consumes the session's SURBs; the periodic tunnel-liveness ping's reply cannot get back (no SURB and/or head-of-line blocked behind download data), so it times out three times (10 s interval, 15 s timeout) and the watchdog logs `tunnel ping ... exceeded max failures - reconnecting`, removes the WireGuard interface and recreates it ~3-4 s later. The reassembly failures are `hopr_protocol_session::socket: failed to reassemble frame ... has expired or has been discarded`. TCP downloads at the same nominal rate complete because TCP backs off; the CBR flow has no backpressure.
+Mechanism — MEASURED by the deep dive on 2026-09-20 (run `exploration/runs/20260920T081129Z-deepdive-disconnect`), and it is NOT SURB exhaustion:
+
+- **SURB buffers stay full throughout.** At every ping timeout and at the reconnect, the client's active-session `hopr_session_surb_buffer_estimate` was ~14000-24000 and the exit's `hopr_surb_balancer_current_buffer_estimate` ~12500 (above its 9766 target). The earlier "ping reply has no SURB" guess is WRONG.
+- **The download goodput undergoes congestion collapse.** The 15 Mbit/s download starts ~10 Mbit/s and then decays monotonically to ~0 over ~2 minutes, with 16591 `hopr_protocol_session::socket: failed to reassemble frame ... expired or discarded`. A CBR flow with no backpressure keeps the bottleneck queue full; frames sit past the reassembly deadline and are dropped whole; goodput spirals down. The periodic tunnel ping rides that same collapsed download path and eventually misses enough consecutive probes to trip the watchdog: `TunnelPingResult: Error(Ping timed out)` → `tunnel ping ... exceeded max failures - reconnecting` → `network link removed` → `created TUN device` ~3.5 s later. It is the liveness watchdog, NOT a data-plane crash (no `worker process exited`).
+- **Direction asymmetry is the clincher.** The 15 Mbit/s UPLOAD control on the same stack sustained the full 15 Mbit/s the whole arm, with ZERO reassembly failures and NO reconnect (client SURBs merely piled up to ~297000, unused). Only the download (server→client) collapses. So the defect is in the server→client data plane — its reassembly / queueing under CBR overload — not a general capacity limit and not SURBs. TCP downloads survive because TCP backs off; the CBR flow has no backpressure.
 
 It **self-heals**: after a 120 s 15 Mbit/s blast that reconnected, 10 min of normal 1.5 Mbit/s traffic was pristine (0.01 % loss), and 8 repeated blast+recover cycles never accumulated (session stayed up throughout). So a single or repeated overload burst leaves no lasting damage.
 
@@ -49,21 +53,22 @@ then lining those up against the millisecond ping/reconnect log via `exploration
 
 Arms: `baseline` (1.5 Mbit/s echo 30 s, must be clean), `download` (15 Mbit/s DL 180 s — the disconnect), `upload` (15 Mbit/s UL 180 s — direction control: does saturating the other way also disconnect?).
 
-- **Launched 2026-09-20 08:04 UTC** as `systemd-run --unit=exp-deepdive` after a fresh stack restart. Log: `/root/testenv/exp/deepdive.log`. Results: `/root/testenv/gnosis_vpn-testenv/exploration/runs/<stamp>-deepdive-disconnect/` with `sample-<arm>.csv`, `logs/<arm>.log`, `probe-<arm>.json`, and the printed timeline in `deepdive.log`.
+- **Ran 2026-09-20 08:11 UTC** after a fresh stack restart. Results: `/root/testenv/gnosis_vpn-testenv/exploration/runs/20260920T081129Z-deepdive-disconnect/` with `sample-<arm>.csv`, `logs/<arm>.log`, `probe-<arm>.json`; the printed timeline is in `/root/testenv/exp/deepdive.log`.
 - Re-run any time on a settled stack: `cd /root/testenv/gnosis_vpn-testenv && exploration/deepdive-disconnect.sh`.
 - Re-analyze a captured arm: `exploration/analyze-deepdive.py <run_dir> download`.
 
-### The specific question the deep dive answers
+### Result (2026-09-20)
 
-At the moment the pings start timing out (t of `PING_TIMEOUT` events), what is `client_surb` and `exit_buf_est`?
-- If `client_surb` → 0 at the ping failures: **SURB exhaustion** — the download drains the SURB pool so the ping reply has no return resource. Fix direction: reserve SURBs for the liveness ping, or give the ping its own low-rate lane.
-- If `client_surb` stays > 0 but download rx keeps flowing through the ping window: **head-of-line blocking / queue congestion** — the ping reply is queued behind bulk download data past the 15 s timeout. Fix direction: prioritise the ping, or make the watchdog tolerant of congestion (longer timeout / more misses under load).
-- If the `upload` arm does NOT reconnect while `download` does: confirms the trigger is return-path/reply starvation specific to server→client saturation.
+Answered: SURB buffers are FULL at every ping timeout and at the reconnect (client ~14000-24000, exit ~12500 > target 9766), so it is neither SURB exhaustion nor a SURB-starved ping reply. The download goodput collapses (10 → ~0 Mbit/s over ~2 min, 16591 frames expired/discarded) and the co-located liveness ping degrades with it until the watchdog reconnects. The upload arm at the same 15 Mbit/s did NOT collapse or reconnect (0 reassembly failures, full rate). See the mechanism paragraph under phenomenon A.
+
+### The open question now
+
+Why does the server→client direction congestion-collapse under CBR overload while client→server does not? Candidates to chase next: the session reassembly timeout/window on the client vs the exit; the bottleneck queue location (which relay or the exit egress) and its depth (bufferbloat); whether the exit paces its send or blasts at the offered 15 Mbit/s. And separately: should the liveness watchdog be tolerant of a congested (but alive) data plane rather than tearing the tunnel down — a longer timeout or more misses under load, or a ping lane that is not behind bulk data.
 
 ## What to try next (ordered)
 
-1. **Finish reading the deep dive** (above). Settle SURB-exhaustion vs HOL-blocking, and the download-vs-upload asymmetry. That is the core of "what exactly is going wrong."
-2. **Confirm the watchdog is the disconnect trigger, not a crash.** In the download arm's client log, verify the sequence is `TunnelPingResult: Error(Ping timed out)` ×3 → `exceeded max failures - reconnecting` → `network link removed` → `created TUN device`, with no `worker process exited` / panic. If it is the watchdog, this is a liveness-ping-under-load policy problem, not a data-plane crash.
+1. **Explain the download-only congestion collapse** (the deep dive's open question above). Instrument the mixnet path: where does the bottleneck queue sit (a relay, the exit egress) and how deep; measure per-hop latency growth during the download blast (add `tc -s qdisc` / queue depth sampling, or hoprd session/queue metrics) to confirm bufferbloat; compare the client-side vs exit-side session reassembly timeout/window that decides when a frame is "expired". The asymmetry (upload fine, download collapses) is the strongest lead — find what differs between the two directions on this 3-node localcluster.
+2. **Decide if the reconnect is the right behaviour.** The watchdog tears the tunnel down when the ping misses under a congested-but-alive data plane. Test a more tolerant policy (longer ping timeout / more misses under load, or a ping lane not queued behind bulk data) and whether the download then rides out the overload instead of reconnecting. This is a gnosis_vpn-lib `tunnel_ping_loop` question.
 3. **Find the exact rate/duration threshold** for the reconnect (between 12 and 15 Mbit/s; and whether a longer 12 Mbit/s run eventually reconnects). `exploration/explore.sh pure-download RATES="12 13 14 15"`.
 4. **Isolate phenomenon B (soak death).** It needs accumulated state. Candidate reproduction: on a fresh stack, run a long mixed session (e.g. hours, or repeated churn: many connect/disconnect + periodic overload) and watch for the non-self-healing state (new connects failing the exit version check). Instrument with the same sampler. Also check the exit hoprd node's own health/CPU and REST latency over the long run.
 5. **Client fix to verify (for A):** the periodic liveness ping should not compete with bulk data for SURBs / queue. This is a gnosis_vpn-lib change (`tunnel_ping_loop` in `core/runner.rs`) plus possibly a hoprd SURB-reservation. When a fixed client build exists, re-run `candidate-overload-teardown.sh` and the deep dive.
