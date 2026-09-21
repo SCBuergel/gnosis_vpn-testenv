@@ -261,7 +261,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Method.** Two otherwise identical T04-fixed-throughput runs: `WAIT_AFTER_CONNECT=0` (cold) and `WARM`=25 s (warm). Compare completion counts and error counters, not just throughput.
 
-**Parameters.** `WARM`=25 s idle for the warm arm; the cold arm idles 0 s with `RAMP_WAIT_OPT_OUT=1`; `REPS` transfers per arm (`--fast` 1); `COLD_WARM_FIRST_RATIO`=0.35, `COLD_DECAP_MULT`=2, `COLD_DECAP_FLOOR`=5.
+**Parameters.** `WARM`=25 s idle for the warm arm; the cold arm idles 0 s with `ramp_wait_opt_out=True`; `REPS` transfers per arm (`--fast` 1); `COLD_WARM_FIRST_RATIO`=0.35, `COLD_DECAP_MULT`=2, `COLD_DECAP_FLOOR`=5.
 
 **Pass criteria.** PASS iff cold `reconnects` = 0 and warm `reconnects` = 0 and cold download completions ≥ warm completions and cold-arm decapsulation errors ≤ max(`COLD_DECAP_FLOOR`=5, `COLD_DECAP_MULT`=2 × the warm arm's). The cold and warm medians are recorded, not gated (until 2026-09-21 the knobs were named as if they bounded the medians while the code bounded the decapsulation errors). The cold/warm first-transfer ratio is RECORDED with `COLD_WARM_FIRST_RATIO`=0.35 as a reference, not gated: three clean cold starts measured 0.48, 0.34 and 0.25 and every threshold tried failed a healthy one. The exit's `hopr_session_surb_target_buffer` at cold load start is recorded, not asserted. The first-transfer ratio is deliberately loose: a fresh 0.96.x session measures the SURB ramp, whose first transfer is about half of steady state by design (see T15-warmup-knee), so the real cold-start signal is completion with zero decap and zero reconnect, not the cold arm matching the warm one. A ratio near the expected ~0.5 ramp ratio would fail every healthy cold start.
 
@@ -400,7 +400,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Method.** T04-fixed-throughput repeated across a sweep of `WAIT_AFTER_CONNECT` (e.g. 0, 5, 15, 30, 60, 120 s), holding everything else fixed. Plot first-transfer throughput against delay.
 
-**Parameters.** `DELAYS`="0 5 15 30 60" s (`--fast` "0 5 20", `--very-fast` "0 5"), `KNEE_FRAC`=0.8, `KNEE_MAX_S`=30 s; each delay is a fresh connect with `RAMP_WAIT_OPT_OUT=1` followed by one download.
+**Parameters.** `DELAYS`="0 5 15 30 60" s (`--fast` "0 5 20", `--very-fast` "0 5"), `KNEE_FRAC`=0.8, `KNEE_MAX_S`=30 s; each delay is a fresh connect with `ramp_wait_opt_out=True` followed by one download.
 
 **Pass criteria.** none. RECORDED. Knee = the first delay at which the first download reaches `KNEE_FRAC`=0.8 × the best delay's rate; a second record flags a knee beyond `KNEE_MAX_S`=30 s as a ramp defect.
 

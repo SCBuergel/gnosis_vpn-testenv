@@ -12,6 +12,7 @@ just test t04                    # one test, without t01 in front; runbook items
 just suite --runbook             # include the runbook items in a run
 just matrix scripts/suite/cells/example.cells --fast
 just suite-selftest              # offline unit tests of suitelib, no stack
+just suite --client NAME --dest ID --target HOST --no-cluster   # production network: any client container, any host running docker/target's services
 ```
 
 There is one run and no profiles: `pytest` collects `tests/` in file order, t01 … t24, every time, and a run id (`--run-id`) that already holds results is refused rather than appended to. T05-loaded-latency sits fifth and T06-realtime-udp sixth, right after the T04-fixed-throughput reference, because their numbers are only comparable on a host that has not been loaded for an hour first. A T01 failure aborts the run (every later test is skipped).

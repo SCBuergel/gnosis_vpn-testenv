@@ -25,6 +25,7 @@ def test_congestion_control(cfg, client, target, checks, knobs):
 
     def restart_cc(cc):
         env = dict(os.environ)
+        env.pop("CLIENT_SYSCTL", None)        # the default client has no sysctl, whatever the surrounding environment says
         if cc:
             env["CLIENT_SYSCTL"] = f"net.ipv4.tcp_congestion_control={cc}"
         ok = shell.ok("just client-stop", timeout=120, cwd=cwd) and shell.ok("just client-start", timeout=300, cwd=cwd, env=env)
@@ -50,7 +51,7 @@ def test_congestion_control(cfg, client, target, checks, knobs):
         for p in range(1, knobs.PAIRS + 1):
             for cc in (("cubic", "bbr") if p % 2 else ("bbr", "cubic")):
                 if not restart_cc(cc):
-                    break
+                    return           # no partial pairs; the finally restores the default client and the FAIL is recorded
                 (a if cc == "cubic" else b).append(measure())
     finally:
         restart_cc("")       # the default client, whatever happened above

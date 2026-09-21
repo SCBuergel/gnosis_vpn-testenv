@@ -51,26 +51,28 @@ def test_forced_reconnect(cfg, run, client, target, checks, knobs):
             if not s:
                 return
             with s:
-                sid = random.getrandbits(30)
-                out = f"t10-{arm}-{rep}"
-                client.probe_bg("callprobe", out, host=target.ip, port=target.call_port, sid=sid, duration=k.DUR, iface=s.iface,
-                                idle_pause=(arm == "S"))
-                time.sleep(k.T_KILL)
-                # remove OUR peer on the server so the tunnel dies from the outside; never every peer, other clients
-                # (T22's extras) may be connected and their sessions are not this test's subject. The client's WireGuard
-                # is a userspace implementation over a TUN device, so `wg show` inside the container sees nothing; the
-                # peer is identified on the server by its allowed-ips, which is the client's own tunnel address.
+                # OUR peer on the server, resolved before anything starts: never every peer, other clients (T22's
+                # extras) may be connected and their sessions are not this test's subject. The client's WireGuard is a
+                # userspace implementation over a TUN device, so `wg show` inside the container sees nothing; the peer
+                # is identified on the server by its allowed-ips, which is the client's own tunnel address.
                 tun_ip = client.out(f"ip -4 -o addr show dev {s.iface} | awk '{{print $4}}' | cut -d/ -f1")
                 pub = server_peer_for(cfg.server, tun_ip)
                 if not pub:
                     checks.failed(f"arm {arm} rep {rep}: no peer on the exit's wggvpn has allowed-ips {tun_ip or '?'} (the client's tunnel address)")
                     continue
+                sid = random.getrandbits(30)
+                out = f"t10-{arm}-{rep}"
+                t_start = time.time()
+                client.probe_bg("callprobe", out, host=target.ip, port=target.call_port, sid=sid, duration=k.DUR, iface=s.iface,
+                                idle_pause=(arm == "S"))
+                time.sleep(k.T_KILL)
                 t_kill = time.time()
                 r = shell.run(["docker", "exec", cfg.server, "wg", "set", "wggvpn", "peer", pub, "remove"], timeout=60)
                 if r.returncode != 0:
                     checks.failed(f"arm {arm} rep {rep}: removing peer {pub[:12]}... on the server failed: {r.stderr.strip()[:120]}")
+                    time.sleep(max(0, k.DUR + 10 - (time.time() - t_start)))   # let the probe end; no probe leaks into the next rep
                     continue
-                time.sleep(k.DUR - k.T_KILL + 20)
+                time.sleep(max(0, k.DUR + 20 - (time.time() - t_start)))
                 e = s.errors()
                 s.save_log(out)
             rec = recovery_s(run / f"{out}.csv", t_kill)
