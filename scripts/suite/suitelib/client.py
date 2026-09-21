@@ -9,7 +9,7 @@ import subprocess
 import time
 
 from . import shell
-from .results import log, utc_now
+from .verdicts import log, utc_now
 
 
 class ConnectFailed(Exception):

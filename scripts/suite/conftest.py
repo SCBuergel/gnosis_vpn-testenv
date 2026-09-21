@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from suitelib import client as clientlib  # noqa: E402
 from suitelib.cluster import Cluster  # noqa: E402
 from suitelib.config import Config  # noqa: E402
-from suitelib.results import KINDS, Checks, RunDir, log, write_summary  # noqa: E402
+from suitelib.verdicts import KINDS, Checks, RunDir, log, write_summary  # noqa: E402
 from suitelib.target import Target  # noqa: E402
 
 TEST_FILE = re.compile(r"test_(t\d\d)_")

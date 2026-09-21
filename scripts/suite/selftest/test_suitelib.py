@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from suitelib import tomlcfg  # noqa: E402
 from suitelib.client import count_log_errors, telemetry_sum  # noqa: E402
 from suitelib.config import Config, q  # noqa: E402
-from suitelib.results import Checks, RunDir  # noqa: E402
+from suitelib.verdicts import Checks, RunDir  # noqa: E402
 from suitelib.stats import p95, stats  # noqa: E402
 from suitelib.target import _curl_result  # noqa: E402
 

@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from suitelib.client import ConnectFailed
-from suitelib.results import utc_now
+from suitelib.verdicts import utc_now
 from suitelib.target import curl_down
 
 TEST = "T22-concurrent-clients"

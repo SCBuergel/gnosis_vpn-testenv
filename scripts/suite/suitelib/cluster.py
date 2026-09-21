@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from . import shell
-from .results import log
+from .verdicts import log
 
 
 class Cluster:
