@@ -32,18 +32,22 @@ pps = a.rate_mbit * 1e6 / 8 / a.size
 pad = b"x" * (a.size - 12)
 ts = probelib.TunnelSocket(a.iface, a.local_port)
 lock = threading.Lock()
-st = {"sent": 0, "recv": 0, "dup": 0, "rtts": [], "delayed": 0, "gaps": [], "persec": {}}
+st = {"sent": 0, "send_failed": 0, "recv": 0, "dup": 0, "rtts": [], "delayed": 0, "gaps": [], "persec": {}}
 seen = set()
 
 
 def sender():
     def send(n):
+        # `sent` counts datagrams the kernel accepted; a sendto that fails (interface gone, kill switch) is a
+        # send failure, not a packet the path lost, so it is reported next to loss and never inside it
         try:
             ts.sock.sendto(struct.pack("!Id", n, time.time()) + pad, dst)
         except OSError:
-            pass
+            with lock:
+                st["send_failed"] += 1
+            return
         with lock:
-            st["sent"] = n + 1
+            st["sent"] += 1
     probelib.paced(a.rate_mbit, a.size, a.duration, send, ts.stop)
     st["send_end"] = time.time()      # the receiver keeps listening --grace seconds for the echoes still in flight
 
@@ -97,7 +101,7 @@ with lock:
         st["gaps"].append((round(ts.last_recv, 3), round(send_end - ts.last_recv, 3)))
     r = st["rtts"]
     summ = {"host": a.host, "iface": a.iface, "local_port": ts.port, "rate_mbit": a.rate_mbit, "size": a.size, "pps": round(pps, 1),
-            "duration_s": round(end - start, 1), "sent": st["sent"], "recv": st["recv"], "dup": st["dup"],
+            "duration_s": round(end - start, 1), "sent": st["sent"], "send_failed": st["send_failed"], "recv": st["recv"], "dup": st["dup"],
             "loss_pct": round(100 * (1 - st["recv"] / max(1, st["sent"])), 2),
             "rtt_ms": probelib.quantiles_ms(r), "delayed_pkts_rtt_gt_1s": st["delayed"]}
     summ.update(probelib.stall_stats(st["gaps"]))

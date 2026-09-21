@@ -12,6 +12,7 @@ import csv
 import glob
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -22,11 +23,24 @@ TESTENV = HERE.parent.parent
 
 
 def _run(cmd, timeout, **kw):
-    """subprocess.run with a timeout that never raises: a hung step is a failed step (returncode 124)."""
+    """subprocess.run with a timeout that never raises: a hung step is a failed step (returncode 124), and the whole
+    process group is killed so a hung run.py does not leave its pytest and probes behind."""
+    p = subprocess.Popen(cmd, shell=isinstance(cmd, str), start_new_session=True,
+                         stdout=subprocess.PIPE if kw.pop("capture_output", False) else None,
+                         stderr=subprocess.STDOUT if "stdout" not in kw else None, text=kw.pop("text", True), env=kw.get("env"), cwd=kw.get("cwd"))
     try:
-        return subprocess.run(cmd, shell=isinstance(cmd, str), timeout=timeout, **kw)
+        out, _ = p.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, p.returncode, out or "", "")
     except subprocess.TimeoutExpired:
         print(f"timeout after {timeout}s: {cmd if isinstance(cmd, str) else ' '.join(map(str, cmd))}", flush=True)
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+            p.wait(timeout=30)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         return subprocess.CompletedProcess(cmd, 124, "", "")
 
 

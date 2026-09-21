@@ -60,6 +60,7 @@ class SuiteState:
         self.tee_err = _Tee(sys.stderr)
         self.started = None
         self.run_id = None
+        self.known_knobs = {"BYTES", "CAP", "REPS"}     # every T<NN>_<VAR> is added at collection
 
 
 def pytest_addoption(parser):
@@ -126,9 +127,12 @@ def pytest_collection_modifyitems(config, items):
     skip = {x for x in config.getoption("--skip").replace(",", " ").split() if x}
     explicit = {Path(a.split("::")[0]).resolve() for a in config.invocation_params.args if not a.startswith("-")}
     keep, deselected = [], []
+    state = config._suite
     for item in items:
         tid = _test_id(item)
         kind = getattr(item.module, "KIND", "gate")
+        if tid:
+            state.known_knobs.update(f"{tid.upper()}_{k}" for k in getattr(item.module, "KNOBS", {}))
         item.add_marker(getattr(pytest.mark, kind))
         named = tid in only or item.path.resolve() in explicit
         if tid is None:
@@ -159,6 +163,11 @@ def pytest_collection_finish(session):
     if not live or session.config.option.collectonly:
         return
     cfg = state.cfg
+    # a --knob no test declares changes nothing and would say nothing until the end; refuse it up front (every
+    # module's KNOBS were registered at collection, selected or not, so --only does not hide a name)
+    unknown = sorted(k for k in cfg.cli_knobs if k not in state.known_knobs)
+    if unknown:
+        raise pytest.UsageError(f"--knob {' '.join(unknown)}: no test declares these names; known: {' '.join(sorted(state.known_knobs))}")
     run_id = state.run_id or session.config.getoption("--run-id") or os.environ.get("SUITE_RUN_ID") \
         or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + (f"-{cfg.cell}" if cfg.cell else "")
     path = cfg.out_dir / run_id
@@ -220,8 +229,8 @@ def pytest_pyfunc_call(pyfuncitem):
         pyfuncitem.obj(**args)
     except TestTimeout as e:
         checks = funcargs.get("checks")
-        if checks is not None:
-            checks.failed(str(e))
+        if checks is not None and checks.kind == "gate":
+            checks.failed(str(e))          # a non-gate gets its one WARN from the makereport hook instead
         pytest.fail(str(e), pytrace=False)
     finally:
         signal.alarm(0)
@@ -244,9 +253,10 @@ def pytest_runtest_makereport(item, call):
     if rep.failed and kind != "gate":
         # only a gate may fail the run: a diagnostic or runbook item that raised (timeout, exception) is recorded as
         # WARN and its pytest outcome rewritten, so the process exit code stays a gate-only signal
-        msg = str(rep.longrepr).strip().splitlines()[-1][:300] if rep.longrepr else "raised"
+        full = str(rep.longrepr).strip() if rep.longrepr else "raised"
+        msg = full.splitlines()[-1][:300]
         state.run.verdict(getattr(item.module, "TEST", tid), "WARN", kind, f"{kind} raised instead of recording: {msg}")
-        print(f"WARN {getattr(item.module, 'TEST', tid)}: {kind} raised instead of recording: {msg}", flush=True)
+        print(f"WARN {getattr(item.module, 'TEST', tid)}: {kind} raised instead of recording: {msg}\n{full}", flush=True)   # the traceback stays in console.log
         rep.outcome = "passed"
         rep.longrepr = None
     rc = 1 if rep.failed else 0

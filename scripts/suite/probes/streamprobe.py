@@ -37,13 +37,16 @@ summ = {"mode": a.mode, "rate_mbit": a.rate_mbit, "size": a.size, "pps": round(p
 
 if a.mode == "ul":
     pad = b"x" * (a.size - 20)
+    sent_ok = {"n": 0, "failed": 0}
 
     def send(n):
         try:
             ts.sock.sendto(b"UPLD" + struct.pack("!IId", sid, n, time.time()) + pad, dst)
+            sent_ok["n"] += 1
         except OSError:
-            pass
+            sent_ok["failed"] += 1        # interface gone: a send failure, reported next to loss, never inside it
     n = probelib.paced(a.rate_mbit, a.size, a.duration, send)
+    n = sent_ok["n"]                       # `sent` is what the kernel accepted; the server's loss is over that
     send_end = time.time()
     time.sleep(2.0)
     rep = None
@@ -57,7 +60,7 @@ if a.mode == "ul":
                 break
         except OSError:
             continue
-    summ.update({"sent": n, "duration_s": round(send_end - start, 1), "server_report": rep})
+    summ.update({"sent": n, "send_failed": sent_ok["failed"], "duration_s": round(send_end - start, 1), "server_report": rep})
     if rep:
         summ.update({k: rep[k] for k in rep if k != "sent"})
 else:

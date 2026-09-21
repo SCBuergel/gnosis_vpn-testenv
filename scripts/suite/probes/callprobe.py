@@ -39,7 +39,7 @@ CALS = struct.Struct("!IffIfI")
 dst = (a.host, a.port)
 log = open(a.out + ".csv", "w", buffering=1 << 16)
 loglock = threading.Lock()
-state = {"sent": [0, 0], "recv": [0, 0], "dup": [0, 0], "delay": [[], []], "last_recv": None, "gaps": [],
+state = {"sent": [0, 0], "send_failed": [0, 0], "recv": [0, 0], "dup": [0, 0], "delay": [[], []], "last_recv": None, "gaps": [],
          "seen": [set(), set()], "started": False, "hold_until": 0.0}
 
 
@@ -91,7 +91,8 @@ def sender():
         try:
             ts.sock.sendto(b"CALU" + HDR.pack(a.sid, seq, kind, sent_at) + pad, dst)
         except OSError:
-            pass
+            state["send_failed"][kind] += 1     # interface gone: not a packet the path lost
+            continue
         state["sent"][kind] += 1
         with loglock:
             log.write("S,%d,%d,%.6f\n" % (kind, seq, sent_at))
@@ -165,8 +166,8 @@ except OSError:
 ev("END")
 log.flush()
 summ = {"sid": a.sid, "host": a.host, "iface": a.iface, "duration_s": a.duration,
-        "video": {"pps": a.video_pps, "size": a.video_size, "sent": state["sent"][0], "recv": state["recv"][0], "dup": state["dup"][0]},
-        "audio": {"pps": a.audio_pps, "size": a.audio_size, "sent": state["sent"][1], "recv": state["recv"][1], "dup": state["dup"][1]},
+        "video": {"pps": a.video_pps, "size": a.video_size, "sent": state["sent"][0], "send_failed": state["send_failed"][0], "recv": state["recv"][0], "dup": state["dup"][0]},
+        "audio": {"pps": a.audio_pps, "size": a.audio_size, "sent": state["sent"][1], "send_failed": state["send_failed"][1], "recv": state["recv"][1], "dup": state["dup"][1]},
         "server": rep, "rebinds": ts.rebinds,
         "down_delay_over_min_ms": {k: probelib.quantiles_ms(probelib.over_min(state["delay"][i])) for i, k in ((0, "video"), (1, "audio"))},
         "down_gaps_gt_1s": len(state["gaps"]), "down_gap_total_s": round(sum(g[1] for g in state["gaps"]), 1),

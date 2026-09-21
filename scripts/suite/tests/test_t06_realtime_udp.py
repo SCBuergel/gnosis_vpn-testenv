@@ -38,6 +38,7 @@ def check_arm(checks, k, label, rate, dur, j, e):
     exp = expected_pkts(rate, dur, k.SIZE)
     rec = int(e.get("reconnects") or 0)
     rebinds = int(j.get("rebinds") or 0)
+    send_failed = int(j.get("send_failed") or 0)
     outage = j.get("outage_total_s")
     if outage is None:
         outage = "n/a (upload: see the server report's stalls)"
@@ -49,8 +50,8 @@ def check_arm(checks, k, label, rate, dur, j, e):
                              f"timeouts, probe rebinds {rebinds}, outage {outage}s; loss on the live path {loss}%, sample {pct}% of expected")
     # 2. did the probe run at all?
     if pct < k.SAMPLE_MIN_PCT:
-        return checks.failed(f"{label}: UNMEASURED - probe sent {sent} of {exp} expected packets ({pct}%, floor {k.SAMPLE_MIN_PCT}%); "
-                             f"any loss figure from this arm is meaningless (reported {loss}%)")
+        return checks.failed(f"{label}: UNMEASURED - probe sent {sent} of {exp} expected packets ({pct}%, floor {k.SAMPLE_MIN_PCT}%; "
+                             f"{send_failed} sends failed on a missing interface); any loss figure from this arm is meaningless (reported {loss}%)")
     # 3. did it report anything?
     if loss is None:
         return checks.failed(f"{label}: no loss figure - the probe's report never arrived (sent {sent} packets in {j.get('duration_s')} s)")

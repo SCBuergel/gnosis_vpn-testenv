@@ -52,7 +52,8 @@ def test_sustained_soak(cfg, run, client, cluster, target, checks, knobs):
     sent = int(call.get("sent") or 0)
     pct = round(sent * 100.0 / max(expected, 1), 1)
     if pct < k.SAMPLE_MIN_PCT:
-        checks.failed(f"UNMEASURED - the call sent {sent} of {expected} expected packets ({pct}%, floor {k.SAMPLE_MIN_PCT}%); reconnects "
+        checks.failed(f"UNMEASURED - the call sent {sent} of {expected} expected packets ({pct}%, floor {k.SAMPLE_MIN_PCT}%; "
+                      f"{call.get('send_failed', 0)} sends failed on a missing interface); reconnects "
                       f"{e['reconnects']} (tunnel-ping timeouts {e['ping_timeouts']}); the loss figure ({call.get('loss_pct')}%) is not a measurement")
         return
     msg = (f"{k.DUR}s: reconnects {e['reconnects']} (tunnel-ping timeouts {e['ping_timeouts']}), reassembly {e['reassembly_failed']}, "
