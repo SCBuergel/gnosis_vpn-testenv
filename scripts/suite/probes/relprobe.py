@@ -48,6 +48,8 @@ def sender():
             return
         with lock:
             st["sent"] += 1
+    # the sequence number keeps advancing through a send failure, so the far end sees a gap that is not loss;
+    # loss is recv over accepted sends, never derived from sequence numbers
     probelib.paced(a.rate_mbit, a.size, a.duration, send, ts.stop)
     st["send_end"] = time.time()      # the receiver keeps listening --grace seconds for the echoes still in flight
 

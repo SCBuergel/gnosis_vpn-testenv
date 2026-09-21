@@ -39,7 +39,8 @@ def _run(cmd, timeout, **kw):
         except (ProcessLookupError, subprocess.TimeoutExpired):
             try:
                 os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
+                p.wait(timeout=10)          # reap it; otherwise it stays a zombie until the matrix process exits
+            except (ProcessLookupError, subprocess.TimeoutExpired):
                 pass
         return subprocess.CompletedProcess(cmd, 124, "", "")
 

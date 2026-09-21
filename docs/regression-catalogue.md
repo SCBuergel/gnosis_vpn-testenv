@@ -358,7 +358,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Parameters.** `UPSTREAMS`="12 16 48 96" Mb/s (`--fast` "16 96", `--very-fast` 16), `PASSES`=2 (`--fast` and `--very-fast` 1; even passes run the cells in reverse). Cells: `main:<U>` for each upstream and `ping:10MB`; each cell is a client restart, connect, one cold and one warm download.
 
-**Pass criteria.** PASS iff the best warm download > 0 and the worst warm download across cells ≥ 0.3 × the best. Masking cell: PASS iff a cold download on the default ping tier completes within `CAP` (n = 1); FAIL when it does not but the raised ping tier's does.
+**Pass criteria.** PASS iff the best warm download > 0 and the worst warm download across cells ≥ 0.3 × the best. Masking cell: PASS iff a cold download on the default ping tier completes within `CAP` (n = 1); FAIL when it does not, whatever the raised ping tier's download did (both results are named in the verdict, so a raised tier that passes shows the tuning is masking a default-config defect).
 
 
 **Why it exists.** 2026-09-02: 48 Mb/s ≈ baseline and **96 Mb/s collapsed downloads** (established, then flatlined under a `frame discarded` storm: the SURB flood congests the path). 2026-09-14 `coldmain`: the 10 MB ping tier alone made the cold start pass, at the price of a ≈4 900-SURB readiness gate (≈30 s at 512 kb/s). And the raised ping tier is exactly the tuned config that masked the 0.96.1 ramp bug for a day (the masking cell below). The axis has a known cliff and a known mask.
