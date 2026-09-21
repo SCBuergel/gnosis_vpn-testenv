@@ -10,7 +10,8 @@ every VPN client emerging from one exit shares that exit's egress IP, and a publ
 source IP (speed.cloudflare.com returned 429 with Retry-After 3071 s to ALL clients of one exit after ~45 min
 of testing, which also rate-limited the exit's real users). A local target has no limit, gives a symmetric upload
 endpoint, and keeps every run comparable with every other. The content is pseudo-random (one 1 MiB block
-repeated) so that nothing on the path can compress it into a throughput that was never carried.
+repeated), so a deflate-class compressor or the tunnel cannot shrink it into a throughput that was never carried
+(a long-window codec such as xz would still find the 1 MiB period; nothing on this path runs one).
 Stdlib only. Threaded, no logging, no rate limiting by design."""
 import os
 import random

@@ -55,7 +55,7 @@ def test_forced_reconnect(cfg, run, client, target, checks, knobs):
                 # extras) may be connected and their sessions are not this test's subject. The client's WireGuard is a
                 # userspace implementation over a TUN device, so `wg show` inside the container sees nothing; the peer
                 # is identified on the server by its allowed-ips, which is the client's own tunnel address.
-                tun_ip = client.out(f"ip -4 -o addr show dev {s.iface} | awk '{{print $4}}' | cut -d/ -f1")
+                tun_ip = client.out(f"ip -4 -o addr show dev {s.iface} | head -1 | awk '{{print $4}}' | cut -d/ -f1")
                 pub = server_peer_for(cfg.server, tun_ip)
                 if not pub:
                     checks.failed(f"arm {arm} rep {rep}: no peer on the exit's wggvpn has allowed-ips {tun_ip or '?'} (the client's tunnel address)")

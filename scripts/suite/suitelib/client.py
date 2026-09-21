@@ -319,7 +319,7 @@ class Client:
     # -- logs and telemetry ----------------------------------------------------------------------------------
     def log_lines(self, since):
         """Iterate the container log since a docker --since stamp (streamed: the debug log is large)."""
-        p = subprocess.Popen(["docker", "logs", "--since", since, self.name], stdout=subprocess.PIPE,
+        p = subprocess.Popen(["timeout", "600", "docker", "logs", "--since", since, self.name], stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, errors="replace")
         try:
             for line in p.stdout:
@@ -408,6 +408,12 @@ class Client:
 
     def probe_bg(self, probe, out, **args):
         return self.exec_bg(self.probe_cmd(probe, out, **args))
+
+    def kill_probes(self):
+        """Stop any probe still running inside the container (after a test timeout the local docker exec dies, the
+        probe does not); the pattern is anchored so it cannot match its own shell."""
+        if self.exists():
+            self.exec("pkill -f '^python3 /suite/probes/' 2>/dev/null; true", timeout=30)
 
 
 def clients_running(cfg, run, limit=16):

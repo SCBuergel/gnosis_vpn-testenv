@@ -15,6 +15,8 @@ def run(cmd, timeout=DEFAULT_TIMEOUT, input=None, env=None, cwd=None):
         out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         return subprocess.CompletedProcess(cmd, 124, out, err + f"\n[timeout after {timeout}s]")
+    except FileNotFoundError as e:       # the binary itself (docker, tc, just) is missing: a failed command, not a crash
+        return subprocess.CompletedProcess(cmd, 127, "", f"{e}")
 
 
 def out(cmd, timeout=DEFAULT_TIMEOUT, default="", **kw):

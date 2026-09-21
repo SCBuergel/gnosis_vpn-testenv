@@ -4,7 +4,7 @@ pytest form of [docs/regression-catalogue.md](../../docs/regression-catalogue.md
 
 ```sh
 just up-nobuild                  # or: just up   — stack + target + clients
-just suite                       # THE run: every test, one order (t01 … t24); T03 records repeatability on the way
+just suite                       # THE run: every test, one order (t01 … t24); T03-repeatability-baseline records repeatability on the way
 just suite --fast                # the catalogue's shorter durations; --very-fast is more aggressive still
 just suite --only t09,t22        # one or a few tests (t01 still runs first); --skip tNN drops one
 just suite --knob T22_LADDER="1 2"   # a per-test knob (or T22_LADDER="1 2" in the environment)
@@ -15,7 +15,7 @@ just suite-selftest              # offline unit tests of suitelib, no stack
 just suite --client NAME --dest ID --target HOST --no-cluster   # production network: any client container, any host running docker/target's services
 ```
 
-There is one run and no profiles: `pytest` collects `tests/` in file order, t01 … t24, every time, and a run id (`--run-id`) that already holds results is refused rather than appended to. T05-loaded-latency sits fifth and T06-realtime-udp sixth, right after the T04-fixed-throughput reference, because their numbers are only comparable on a host that has not been loaded for an hour first. A T01 failure aborts the run (every later test is skipped).
+There is one run and no profiles: `pytest` collects `tests/` in file order, t01 … t24, every time, and a run id (`--run-id`) that already holds results is refused rather than appended to. T05-loaded-latency sits fifth and T06-realtime-udp sixth, right after the T04-fixed-throughput reference, because their numbers are only comparable on a host that has not been loaded for an hour first. A T01-topology-preconditions failure aborts the run (every later test is skipped).
 
 **Layout.** A test module declares `TEST` (its catalogue id, used as the verdict and row label), `KIND` (`gate`, `diagnostic` or `runbook`) and `KNOBS` (every knob with its default; `q(normal, fast)` gives a `--fast` value). Its one test function takes fixtures: `cfg` (global knobs), `run` (the results directory), `client` / `clients` / `client2` (client containers), `cluster` (localcluster status, node REST and metrics, live `tc netem`, the node sampler), `target` (the traffic target; the test skips when it is not running), `checks` (the verdict recorder) and `knobs` (the module's `KNOBS` resolved for this run). `client.connect(dest, idle)` returns a session that disconnects on leaving its `with` block; `client.probe(...)` runs one of `probes/` inside the container.
 

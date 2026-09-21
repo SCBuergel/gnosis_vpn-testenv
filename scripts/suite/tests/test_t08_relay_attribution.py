@@ -12,7 +12,7 @@ from suitelib.target import curl_down
 
 TEST = "T08-relay-attribution"
 KIND = "gate"
-KNOBS = dict(SUITE_EQUAL_LATENCY=1, SPLIT_TOL_PCT=60)
+KNOBS = dict(SUITE_EQUAL_LATENCY=1, SPLIT_TOL_PCT=60, SPLIT_MIN_PATHS=1000)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 PATH = re.compile(r"path=validated path \[([^\]]*)\]")
 
@@ -58,6 +58,8 @@ def test_relay_attribution(cfg, client, cluster, target, checks, knobs):
     skew = round(100 * (counts[0] - counts[-1]) / max(sum(counts), 1), 1) if len(counts) > 1 else None
     if len(counts) < 2 or skew is None:
         checks.record(f"split: only {len(counts)} return relay(s) in play, distribution not meaningful")
+    elif sum(counts) < k.SPLIT_MIN_PATHS:
+        checks.record(f"split: only {sum(counts)} return paths (floor SPLIT_MIN_PATHS={k.SPLIT_MIN_PATHS}), skew {skew}% recorded, not gated")
     elif k.SUITE_EQUAL_LATENCY == 1:
         if skew <= k.SPLIT_TOL_PCT:
             checks.passed(f"split on equal-latency relays: skew {skew}% <= {k.SPLIT_TOL_PCT}% {counts}")

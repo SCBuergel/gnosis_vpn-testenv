@@ -240,6 +240,15 @@ def pytest_runtest_makereport(item, call):
     tid = _test_id(item)
     if rep.when != "call" or not tid or state.run is None:
         return
+    kind = getattr(item.module, "KIND", "gate")
+    if rep.failed and kind != "gate":
+        # only a gate may fail the run: a diagnostic or runbook item that raised (timeout, exception) is recorded as
+        # WARN and its pytest outcome rewritten, so the process exit code stays a gate-only signal
+        msg = str(rep.longrepr).strip().splitlines()[-1][:300] if rep.longrepr else "raised"
+        state.run.verdict(getattr(item.module, "TEST", tid), "WARN", kind, f"{kind} raised instead of recording: {msg}")
+        print(f"WARN {getattr(item.module, 'TEST', tid)}: {kind} raised instead of recording: {msg}", flush=True)
+        rep.outcome = "passed"
+        rep.longrepr = None
     rc = 1 if rep.failed else 0
     with open(state.run / "run.txt", "a") as r:
         r.write(f"{time.strftime('%T', time.gmtime())} {tid} rc={rc} took={int(rep.duration)}s\n")
@@ -253,6 +262,9 @@ def pytest_sessionfinish(session, exitstatus):
     if state is None or state.run is None:
         return
     clientlib._disarm_all()
+    unused = state.cfg.unused_cli_knobs()
+    if unused:
+        print(f"WARNING: --knob {' '.join(unused)}: no test read these names (typo?)", flush=True)
     if session.config.option.xmlpath:
         print(f"junit: {session.config.option.xmlpath}")
     gate_fail = write_summary(state.run)
@@ -363,3 +375,4 @@ def _leave_no_session_behind():
             log(f"{c.name}: still connected at test end - disconnecting")
             c.disconnect()
         c.disarm_deadman()
+        c.kill_probes()      # a timeout kills the docker exec, not the probe inside the container

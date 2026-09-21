@@ -102,7 +102,7 @@ just suite --fast                                 # the one run, shorter duratio
 just matrix scripts/suite/cells/example.cells     # one stack per version/config cell
 just suite-selftest                               # offline: library unit tests + every probe against every target service on loopback
 just suite --client gnosis_vpn-client --dest node-0 --target 203.0.113.7 --no-cluster   # production network: any client, any host running docker/target
-just nightly                                      # the daily battery: build the latest of every component, up, suite --fast, down
+just nightly                                      # the daily battery: build the sibling checkouts as they are, up, suite --fast, down
 ```
 
 What the suite added to the stack (each is a justfile variable with the old behaviour as default):

@@ -26,7 +26,7 @@ def pid_ticks(pid):
         return None
 def cgroup_usage(name):
     try:
-        cid = subprocess.check_output(["docker", "inspect", "-f", "{{.Id}}", name], text=True).strip()
+        cid = subprocess.check_output(["docker", "inspect", "-f", "{{.Id}}", name], text=True, timeout=5).strip()
         for p in (f"/sys/fs/cgroup/system.slice/docker-{cid}.scope/cpu.stat", f"/sys/fs/cgroup/docker/{cid}/cpu.stat"):
             if os.path.exists(p):
                 for line in open(p):

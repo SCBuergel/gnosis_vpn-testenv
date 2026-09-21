@@ -8,9 +8,7 @@ for exactly this reason. Each rebind is counted and the outage it caused (last p
 is reported next to, not inside, the loss figure. The local port is kept across rebinds so the far end's view of
 us does not change. An empty iface means an unbound socket (loopback self-tests).
 
-The 8 MB socket buffers exist because the mixnet delivers in bursts after a stall: with the kernel default (~200 kB)
-a burst of a few hundred 1200 B datagrams overflows the receive queue, and a kernel drop would then be booked as
-tunnel loss. The buffers make the probe measure the path, not the probe."""
+The 8 MB socket buffers are the same choice as on the target side, for the reason given in docker/target/udpserver.py."""
 import socket
 import threading
 import time

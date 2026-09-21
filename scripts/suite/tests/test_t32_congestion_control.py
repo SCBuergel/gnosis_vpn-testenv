@@ -51,7 +51,8 @@ def test_congestion_control(cfg, client, target, checks, knobs):
         for p in range(1, knobs.PAIRS + 1):
             for cc in (("cubic", "bbr") if p % 2 else ("bbr", "cubic")):
                 if not restart_cc(cc):
-                    return           # no partial pairs; the finally restores the default client and the FAIL is recorded
+                    checks.row(kind="summary", result={"abandoned": f"restart with {cc} failed", "cubic_arms": len(a), "bbr_arms": len(b)})
+                    return           # no partial pairs; the finally restores the default client and the failure is recorded (WARN: runbook)
                 (a if cc == "cubic" else b).append(measure())
     finally:
         restart_cc("")       # the default client, whatever happened above

@@ -31,6 +31,9 @@ def test_warmup_knee(cfg, client, target, checks, knobs):
         checks.log(f"delay {d} s -> {r['mbit']} Mbit/s complete={r['complete']}")
     st = stats(vals)
     measured = [v for v in vals if v is not None]
+    if not measured:
+        checks.row(kind="summary", stats=st, delays=k.DELAYS, knee_s=None)
+        return checks.record(f"no delay measured (every connect failed over [{k.DELAYS}]); no knee to report")
     best = max(measured) if measured else 0
     knee = next((d for d, v in zip(delays, vals) if v is not None and best > 0 and v >= k.KNEE_FRAC * best), "beyond-sweep")
     checks.row(kind="summary", stats=st, delays=k.DELAYS, knee_s=knee, first_transfer_mbit=" ".join(str(v) for v in vals))

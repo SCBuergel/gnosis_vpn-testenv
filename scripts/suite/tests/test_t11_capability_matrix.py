@@ -60,4 +60,5 @@ def test_capability_matrix(cfg, run, client, live_cluster, target, checks, knobs
             checks.verdict(e["decap_error"] == 0 and shaped == expect, msg)
     finally:
         shutil.copy(orig, cfg_file)
-        client.restart()
+        if not client.restart():
+            checks.failed("restore: client restart on the original config failed; later tests start from a stopped client")

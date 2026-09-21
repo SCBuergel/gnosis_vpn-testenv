@@ -59,6 +59,7 @@ class Config:
         self.very_fast = very_fast
         self.fast = fast or very_fast
         self.cli_knobs = dict(knobs or {})
+        self.consumed = set()
         e = self.env
         here = Path(__file__).resolve().parent.parent
         self.suite_dir = here
@@ -111,12 +112,17 @@ class Config:
         """Resolve one knob. prefix is 'T23' for a per-test knob or '' for a global one."""
         dflt = self.default(default)
         key = f"{prefix}_{name}" if prefix else name
+        self.consumed.add(key)
         for src in (self.cli_knobs, self.env):
             if key in src and src[key] != "":
                 return _coerce(src[key], dflt)
         if self.very_fast and key in VERY_FAST:
             return _coerce(VERY_FAST[key], dflt)
         return dflt
+
+    def unused_cli_knobs(self):
+        """--knob names no test resolved; a typo would otherwise change nothing and say nothing."""
+        return sorted(k for k in self.cli_knobs if k not in self.consumed)
 
     def knobs(self, prefix, spec):
         """Resolve a whole {NAME: default} spec into a Knobs object."""

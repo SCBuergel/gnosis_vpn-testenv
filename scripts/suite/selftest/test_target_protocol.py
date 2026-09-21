@@ -3,8 +3,6 @@ thread on an ephemeral port, the matching probe runs as the subprocess the suite
 (with --iface '' so it does not bind to a tunnel interface), and its report must show a complete, lossless run.
 This is the protocol contract the live tests rely on (T06, T10, T11, T13, T18, T20, T23, T24)."""
 import json
-import os
-import socket
 import subprocess
 import sys
 import threading
@@ -123,4 +121,3 @@ def test_main_runs_all_four_services(monkeypatch):
     with pytest.raises(SystemExit) as e:
         main.main()
     assert e.value.code == 1
-    assert socket.gethostbyname("localhost") and os.path.exists(TARGET / "Dockerfile")

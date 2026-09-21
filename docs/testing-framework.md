@@ -9,7 +9,7 @@ Requested in the review of the first suite revision, which was bash scripts on a
 | Fixtures with setup/teardown that survive a failing test | a client left connected strands a host behind its kill switch; the deadman and the disconnect-on-exit are not optional |
 | Parameters overridable from the command line and the environment, per test | the same test runs at 15 s (`--very-fast`), 90 s (`--fast`) and 300 s, and against a localcluster or a production exit |
 | Several verdicts per test, machine-readable, plus free-form measurements | a run is diffed as `rows.jsonl`/`verdicts.jsonl`, not read as a log; a gate records five checks and a diagnostic records numbers with no pass/fail |
-| Deterministic order and a hard stop on a failed precondition | T03 must run before any gate, T05/T06 before an hour of load; a broken T01 makes every later number meaningless |
+| Deterministic order and a hard stop on a failed precondition | T03-repeatability-baseline must run before any gate, T05-loaded-latency/T06-realtime-udp before an hour of load; a broken T01-topology-preconditions makes every later number meaningless |
 | Timeouts on every test and every subprocess | a hung `docker exec` or a probe that never reports must not hang a nightly run |
 | Standard result formats for CI and dashboards | JUnit XML is what every CI reads; a custom format needs a custom reader |
 | The language the probes and target already use | the UDP probes (`probes/`) and the target services (`docker/target/`) are Python; one language means one set of shared code and one self-test run |
@@ -28,11 +28,16 @@ Requested in the review of the first suite revision, which was bash scripts on a
 
 ## What pytest gives the suite, concretely
 
-- `conftest.py` owns the mechanics that used to be `run.sh` and `lib.sh`: the run directory and its refusal of a reused id, `--fast`/`--very-fast`/`--knob`, `--only`/`--skip`, T01 aborting the run, per-test timeouts (`TIMEOUT(knobs)`), the console log, the summary and `junit.xml`.
+- `conftest.py` owns the mechanics that used to be `run.sh` and `lib.sh`: the run directory and its refusal of a reused id, `--fast`/`--very-fast`/`--knob`, `--only`/`--skip`, T01-topology-preconditions aborting the run, per-test timeouts (`TIMEOUT(knobs)`), the console log, the summary and `junit.xml`.
 - Fixtures: `cfg`, `run`, `client`/`clients`/`client2`, `cluster`/`live_cluster`, `target`, `checks`, `knobs`. A session is a context manager (`with client.connect(dest, idle) as s:`); an autouse fixture disconnects whatever a failed test left connected.
 - A test module declares `TEST`, `KIND` and `KNOBS`; every knob is overridable as `--knob T<NN>_<VAR>=…` or `T<NN>_<VAR>` in the environment, so load, size, rate, host and duration can be changed per invocation without editing a test.
 - Production networks: `--client`, `--dest`, `--target HOST` and `--no-cluster` run the same tests against any client container and any host running the target services (`docker/target`, plain Python modules); cluster-only checks skip and say so.
 - Offline self-tests (`just suite-selftest`, 25 cases) cover the library and run every probe against every target service on loopback, so the wire protocol is checked without a stack.
+
+## Plugins considered and not used
+
+- **pytest-timeout** would replace the SIGALRM code in `conftest.py`. It was not used because its limit is one number per test (a marker or an ini value), and the suite's limit is a function of the test's own knobs (`TIMEOUT(knobs)`: a soak of `DUR` seconds needs `DUR` plus its overhead), which a marker cannot express without duplicating the arithmetic. The custom version has the same shape as pytest-timeout's signal method: it covers the call phase only, not fixture setup, and it kills the local `docker exec`, not the process inside the container (the harness reaps stray probes after each test for that reason). Switching to the plugin remains an option once the per-module limits settle into constants.
+- **pytest-xdist** does not apply: there is one stack, and every test uses the same client and exit, so the tests cannot run in parallel.
 
 ## What it does not solve
 

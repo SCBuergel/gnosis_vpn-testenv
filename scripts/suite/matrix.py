@@ -21,6 +21,15 @@ HERE = Path(__file__).resolve().parent
 TESTENV = HERE.parent.parent
 
 
+def _run(cmd, timeout, **kw):
+    """subprocess.run with a timeout that never raises: a hung step is a failed step (returncode 124)."""
+    try:
+        return subprocess.run(cmd, shell=isinstance(cmd, str), timeout=timeout, **kw)
+    except subprocess.TimeoutExpired:
+        print(f"timeout after {timeout}s: {cmd if isinstance(cmd, str) else ' '.join(map(str, cmd))}", flush=True)
+        return subprocess.CompletedProcess(cmd, 124, "", "")
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -42,30 +51,30 @@ def main(argv):
                "CLIENT_EXTRA_ENV": clenv, "SUITE_CELL": name}
         print(f"##### cell {name}: client={cimg} hoprd={hbin} cluster_env='{cenv}' client_env='{clenv}' localcluster={lcbin} "
               f"({time.strftime('%T', time.gmtime())})", flush=True)
-        subprocess.run("just down", shell=True, cwd=TESTENV, capture_output=True)
-        if subprocess.run("just up-nobuild", shell=True, cwd=TESTENV, env=env).returncode != 0:
+        _run("just down", cwd=TESTENV, capture_output=True, timeout=900)
+        if _run("just up-nobuild", cwd=TESTENV, env=env, timeout=1800).returncode != 0:
             print(f"cell {name}: stack failed to come up", flush=True)
             with open(out / f"matrix-{stamp}.log", "a") as lg:
                 lg.write(f"cell {name}: stack failed to come up\n")
             fail = 1
             continue
         if int(os.environ.get("EXTRA_IDENTITIES", "1")) >= 2:
-            subprocess.run("just client2-start", shell=True, cwd=TESTENV, env=env)
+            _run("just client2-start", cwd=TESTENV, env=env, timeout=600)
         # a fresh client syncs and health-checks before any destination is Ready; give it up to READY_TIMEOUT s
         dest = os.environ.get("DEST", "node-0")
         ready_timeout = int(os.environ.get("READY_TIMEOUT", "600"))
         waited = 0
         while waited < ready_timeout:
-            st = subprocess.run(["docker", "exec", "gnosis_vpn-client", "gnosis_vpn-ctl", "status"], capture_output=True, text=True).stdout
+            st = _run(["docker", "exec", "gnosis_vpn-client", "gnosis_vpn-ctl", "status"], capture_output=True, text=True, timeout=60).stdout
             if f"{dest} Route health: Ready" in st:
                 break
             time.sleep(10)
             waited += 10
         print(f"cell {name}: {dest} Ready after {waited}s", flush=True)
-        rc = subprocess.run([sys.executable, str(HERE / "run.py"), "--cell", name, "--run-id", f"{stamp}-{name}", *extra],
-                            cwd=TESTENV, env=env).returncode
+        rc = _run([sys.executable, str(HERE / "run.py"), "--cell", name, "--run-id", f"{stamp}-{name}", *extra],
+                  cwd=TESTENV, env=env, timeout=int(os.environ.get("MATRIX_CELL_TIMEOUT", "43200"))).returncode
         fail = fail or (1 if rc else 0)
-        subprocess.run("just down", shell=True, cwd=TESTENV, env=env, capture_output=True)
+        _run("just down", cwd=TESTENV, env=env, capture_output=True, timeout=900)
     rows = []
     for d in sorted(glob.glob(f"{out}/{stamp}-*")):
         try:

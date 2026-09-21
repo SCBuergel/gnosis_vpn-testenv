@@ -25,6 +25,7 @@ ap.add_argument("--size", type=int, default=1200)
 ap.add_argument("--iface", default="wg0_gnosisvpn", help="tunnel interface to bind to ('' = unbound)")
 ap.add_argument("--local-port", type=int, default=0, help="fixed local port (0 = pick once, then keep it across rebinds)")
 ap.add_argument("--out", required=True)
+ap.add_argument("--grace", type=float, default=5.0, help="seconds to keep receiving after the last send (echoes still in flight)")
 a = ap.parse_args()
 dst = (a.host, a.port)
 pps = a.rate_mbit * 1e6 / 8 / a.size
@@ -44,7 +45,7 @@ def sender():
         with lock:
             st["sent"] = n + 1
     probelib.paced(a.rate_mbit, a.size, a.duration, send, ts.stop)
-    st["send_end"] = time.time()      # the receiver keeps listening 2 s for the echoes still in flight
+    st["send_end"] = time.time()      # the receiver keeps listening --grace seconds for the echoes still in flight
 
 
 def receiver():
@@ -85,7 +86,7 @@ start = time.time()
 tS.start()
 tR.start()
 tS.join()
-time.sleep(2.0)
+time.sleep(a.grace)
 ts.stop.set()
 tR.join(1.0)
 end = time.time()

@@ -68,14 +68,16 @@ def test_balancer_sweep(cfg, run, client, cluster, target, checks, knobs):
             checks.failed(f"a cell collapsed: worst {worst} vs best {best} Mbit/s")
         # masking cell
         shutil.copy(orig, cfg_file)
-        client.restart()
+        if not client.restart():
+            checks.failed("masking: client restart on the default config failed")
         d_def = {"mbit": 0, "complete": False}
         s = connect_or_fail(checks, client, cfg.dest, 0, label="masking-default")
         if s:
             with s:
                 d_def = curl_down(client, target.ip, cfg.bytes, cfg.cap)
         tomlcfg.set_section(cfg_file, *RAISED_PING)
-        client.restart()
+        if not client.restart():
+            checks.failed("masking: client restart on the raised ping tier failed")
         d_tun = {"mbit": 0, "complete": False}
         s = connect_or_fail(checks, client, cfg.dest, 0, label="masking-raised")
         if s:
@@ -89,4 +91,5 @@ def test_balancer_sweep(cfg, run, client, cluster, target, checks, knobs):
                           f"- tuning is hiding a default-config defect")
     finally:
         shutil.copy(orig, cfg_file)
-        client.restart()
+        if not client.restart():
+            checks.failed("restore: client restart on the original config failed; later tests start from a stopped client")

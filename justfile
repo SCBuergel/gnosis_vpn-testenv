@@ -126,26 +126,27 @@ build-client-native:
 # Build all components
 build: build-cluster build-server build-client
 
-# Build a Ubuntu-based (glibc 2.39) client image from glibc binaries (a cargo build or an unpacked .deb): build-client-glibc DIR TAG
-build-client-glibc bin_dir tag="gnosis_vpn-client":
+# Build a Ubuntu-based (glibc 2.39) client image from glibc binaries (a cargo build or an unpacked .deb): build-client-glibc DIR TAG [REVISION]
+# REVISION (the source commit) is stored as the OCI label org.opencontainers.image.revision and recorded by T02-build-provenance.
+build-client-glibc bin_dir tag="gnosis_vpn-client" revision="":
     #!/usr/bin/env bash
     set -euo pipefail
     ctx=$(mktemp -d)
     cp "{{bin_dir}}/gnosis_vpn-root" "{{bin_dir}}/gnosis_vpn-worker" "{{bin_dir}}/gnosis_vpn-ctl" "${ctx}/"
     cp "{{GVPN_CLIENT_DIR}}/docker/entrypoint.sh" "${ctx}/"
     cp "{{justfile_directory()}}/docker/client-glibc/Dockerfile" "${ctx}/"
-    docker build -q -t "{{tag}}" "${ctx}" && echo "built {{tag}} from {{bin_dir}}"
+    docker build -q -t "{{tag}}" --label "org.opencontainers.image.revision={{revision}}" "${ctx}" && echo "built {{tag}} from {{bin_dir}} (revision '{{revision}}')"
     rm -rf "${ctx}"
 
-# Build a Ubuntu-based (glibc 2.39) exit-server image from a glibc binary: build-server-glibc BIN TAG
-build-server-glibc bin tag="gnosis_vpn-server":
+# Build a Ubuntu-based (glibc 2.39) exit-server image from a glibc binary: build-server-glibc BIN TAG [REVISION]
+build-server-glibc bin tag="gnosis_vpn-server" revision="":
     #!/usr/bin/env bash
     set -euo pipefail
     ctx=$(mktemp -d)
     cp "{{bin}}" "${ctx}/gnosis_vpn-server"
     cp "{{GVPN_SERVER_DIR}}/docker/config.toml" "{{GVPN_SERVER_DIR}}/docker/wggvpn.conf" "{{GVPN_SERVER_DIR}}/docker/wrapper.sh" "${ctx}/"
     cp "{{justfile_directory()}}/docker/server-glibc/Dockerfile" "${ctx}/"
-    docker build -q -t "{{tag}}" "${ctx}" && echo "built {{tag}} from {{bin}}"
+    docker build -q -t "{{tag}}" --label "org.opencontainers.image.revision={{revision}}" "${ctx}" && echo "built {{tag}} from {{bin}} (revision '{{revision}}')"
     rm -rf "${ctx}"
 
 # Build the in-cluster traffic target image (sized HTTP target, UDP echo, stream server, call server)
@@ -744,9 +745,9 @@ suite *args:
 suite-selftest:
     python3 -m pytest "{{justfile_directory()}}/scripts/suite/selftest" -q
 
-# The daily battery: build the latest checkout of every component, bring the stack up, run the suite (--fast by
-# default; pass e.g. "--very-fast" or "--run-id nightly-$(date +%F)"), take it down. Exit code is the suite's.
-# Schedule it with a systemd timer that runs `just nightly` from a checkout whose sibling repos track the release branches.
+# The daily battery: build the sibling checkouts AS THEY ARE (nothing here pulls or pins upstream tags; the timer's
+# job is to check them out at the versions to test first), bring the stack up, run the suite (--fast by default; pass
+# e.g. "--very-fast" or "--run-id nightly-$(date +%F)"), take it down. Exit code is the suite's.
 nightly *args="--fast":
     #!/usr/bin/env bash
     set -uo pipefail

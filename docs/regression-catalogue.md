@@ -137,7 +137,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 | `AGG_MIN_MBIT` | 8 Mbit/s | T22-concurrent-clients aggregate at the top rung | 16.1 at n=4 | below one client's rate, so it fires only on a collapse; completion and the one-sided drop rule do the finer work |
 | `TOL_PCT` | 25 % | T22-concurrent-clients drop from a lower rung to a higher one | aggregate rose 10.6 → 13.7 → 16.1 | outside the host's ±12-18 % repeatability, inside a real collapse |
 | `COLD_DECAP_MULT`, `COLD_DECAP_FLOOR` | 2, 5 errors | T07-cold-start cold-arm decapsulation errors against the warm arm's | 0 in both arms on the reference stack | a cold session may see a few, not a burst; medians are recorded, not gated |
-| `SPLIT_TOL_PCT` | 60 % | T08-relay-attribution return-path split at equal latency | 11.7 % skew | the split legitimately varies 51/49 to 85/15 across releases; 60 fails only a near-dead relay |
+| `SPLIT_TOL_PCT`, `SPLIT_MIN_PATHS` | 60 %, 1000 paths | T08-relay-attribution return-path split at equal latency | 8 to 72 % skew on the reference stack | 60 fails an 80/20 split and beyond (85/15 is skew 70 and fails); this gate is expected to fail on some healthy runs and is kept as a signal by decision; below the path floor the split is recorded, not gated |
 | `UNSTABLE_PCT` | 50 % | T03-repeatability-baseline flag | 12.1 % | above it the stack cannot repeat its own numbers and every threshold verdict is weak evidence |
 | `LOG_MB_MIN_MAX` | 200 MB/min | T23-sustained-soak client log growth | 63-70 MB/min at path-planner debug | the incident was 1.6 GB/min; 200 is three times the normal rate |
 
@@ -155,7 +155,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Further preconditions**, each from a separate incident:
 
-- **Relay forwarding probe, not just ping.** From the exit's API, open a 1-hop session forced through each candidate relay with a 0-hop return (`forwardPath: {Hops: 1}` toward a destination that makes the relay the only choice) and require it to establish within 5 s. A production relay (jura-1) pinged at 6 ms with a perfect probe rate while every session through it timed out at 70 s; it silently broke half of all 1-hop health checks for three hours. Its metric signature, to assert on: climbing `hopr_egress_ring_buffer_dropped`, `hopr_packet_rejected_count{reason="invalid_ticket"}`, `decode timeout` lines, and 60k/30 min `balance of channel … too low` lines.
+- **Relay forwarding probe, not just ping.** From the exit's API, open a 1-hop session forced through each candidate relay with a 0-hop return (`forwardPath: {Hops: 1}` toward a destination that makes the relay the only choice) and require it to establish within `FWD_TIMEOUT`=20 s. A production relay (jura-1) pinged at 6 ms with a perfect probe rate while every session through it timed out at 70 s; it silently broke half of all 1-hop health checks for three hours. Its metric signature, to assert on: climbing `hopr_egress_ring_buffer_dropped`, `hopr_packet_rejected_count{reason="invalid_ticket"}`, `decode timeout` lines, and 60k/30 min `balance of channel … too low` lines.
 - **Route health per hop count.** Assert every destination reports `Ready` at *its* hop count. The 0-hop route to the same exit was `Ready` throughout the incident above; only the 1-hop route failed, and the distinction is the diagnosis.
 - **Identity lease.** Assert no other node on the network announces or is connected under any identity used in the run (Blokli `accounts` by chain key, plus the peer table). Three identities in the fleet were moved between hosts; the old containers are pinned `--restart=no`, and a double-run would have been invisible to every throughput number.
 - **Announced address matches the host**. For every controlled node, the multiaddress it announced (Blokli, the peers' `network/connected` view, or the client's `external address` log line) must carry the IP it currently runs on. A *client* identity moved between hosts does **not** re-announce: peers keep dialling the old IP, the return path starves, and throughput collapses to ~0.01 Mbit/s with 11–36 s TTFB while the tunnel reports up. (A hoprd relay identity does re-announce with `--announce --host`.)
@@ -176,7 +176,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Question.** What is actually running, and can these components talk to each other?
 
-**Method.** For each binary/image in the stack, record: the version string, the dependency versions actually linked in, and the wire-protocol identifiers compiled in. Assert that every component in a run shares a compatible protocol identifier. Store the result as the run's metadata header.
+**Method.** For each binary/image in the stack, record the version string, the image digest and OCI revision label, and the wire-protocol identifier compiled in where one exists (client worker and hoprd; the exit server has none). Assert the client and hoprd share one protocol identifier. Store the result as the run's metadata header.
 
 **Parameters.** none.
 
@@ -222,7 +222,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Question.** How much does the tunnel's latency inflate under a saturating transfer, and does adding parallel flows inside one session raise aggregate throughput, or only latency?
 
-**Method.** One session. Measure in-tunnel RTT idle, then during a saturating download, then during a saturating upload, `PHASE_S` each; report RTT p50 and p95 per phase. Then N in `PARALLEL` concurrent downloads of `BYTES` in the same session, reporting aggregate Mbit/s per N. Uploads are not run in parallel.
+**Method.** One session. Measure in-tunnel RTT idle, then during a saturating download, then during a saturating upload, `PHASE_S` each; report RTT p50 and p95 per phase. Then N in `PARALLEL` concurrent downloads of `BYTES` in the same session, reporting aggregate Mbit/s per N. Uploads are not run in parallel: the parallel-flow question is about the SURB-metered return path that downloads ride, where the fleet's scaling finding was; uploads ride the forward path, which T24-sustained-upload exercises alone.
 
 **Parameters.** `PHASE_S`=30 s per ping phase (`--fast` 15, `--very-fast` 8), `PARALLEL`="1 3 6" (`--very-fast` "1 3"), `DOWN_P95_MAX_MS`=1500, `UP_P95_MAX_MS`=2500.
 
@@ -259,7 +259,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Question.** Does load applied immediately after tunnel-up behave differently from load applied after the session has settled?
 
-**Method.** Two otherwise identical T04-fixed-throughput runs: `WAIT_AFTER_CONNECT=0` (cold) and `WARM`=25 s (warm). Compare completion counts and error counters, not just throughput.
+**Method.** Two otherwise identical T04-fixed-throughput runs: the cold arm measures straight after connect (ramp wait opted out) and the warm arm after `WARM`=25 s. Compare completion counts and error counters, not just throughput.
 
 **Parameters.** `WARM`=25 s idle for the warm arm; the cold arm idles 0 s with `ramp_wait_opt_out=True`; `REPS` transfers per arm (`--fast` 1); `COLD_WARM_FIRST_RATIO`=0.35, `COLD_DECAP_MULT`=2, `COLD_DECAP_FLOOR`=5.
 
@@ -282,7 +282,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Question.** Which relay is actually carrying the return traffic, and is the distribution what the topology implies?
 
-**Method.** Parse the client's path-planner debug output over a run and count return paths per first-hop relay. Report the split and any "diversity collapsed" warnings. Count from the planner's **candidate lines**: `[forward]` / `[return] candidate path … path=[relay, destination]` at `hopr_transport::path=debug`. The debug target writes ~50 MB/min while connected; scope it to the cell and turn it off afterwards.
+**Method.** Parse the client's path-planner debug output over a run and count return paths per first-hop relay. Report the split and any "diversity collapsed" warnings. Count from the planner's `resolved return path … path=validated path [relay, destination]` lines at `hopr_transport::path=debug`. The debug target writes ~50 MB/min while connected; scope it to the cell and turn it off afterwards.
 
 **Parameters.** `SUITE_EQUAL_LATENCY`=1, `SPLIT_TOL_PCT`=60 %; one download of `BYTES` after a 10 s idle (floored to 25).
 
@@ -328,7 +328,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Parameters.** `DUR`=300 s call (`--fast` 150, `--very-fast` 130), `T_KILL`=60 s (`--very-fast` 20), `RECOVER_MAX`=90 s, `REPEATS`=3 per arm (`--fast` and `--very-fast` 1). `DUR` − `T_KILL` must exceed `RECOVER_MAX`: with a working liveness ping the client notices a removed peer only after three ping cycles, about 75 s, so a 70 s window reads as "never recovered" (seen at `--very-fast` on 2026-09-19).
 
-**Pass criteria.** The peer removed on the exit is the client's own (its WireGuard public key read from the tunnel interface), never every peer, so other clients' sessions are untouched; a repeat whose key cannot be read or whose removal fails FAILs. Per arm (T: the far end keeps streaming through the kill; S: it pauses while the client is silent) and repeat: PASS iff the first downstream packet after the peer removal arrives within `RECOVER_MAX`=90 s and `DecapStalled` = 0; a repeat that never recovers FAILs. Reconnects and probe rebinds are reported, not asserted.
+**Pass criteria.** The peer removed on the exit is the client's own, found in the exit's `wg show wggvpn dump` by allowed-ips = the client's tunnel address (the client's WireGuard is userspace over TUN, so `wg show` inside the container shows nothing), never every peer, so other clients' sessions are untouched; a repeat whose key cannot be read or whose removal fails FAILs. Per arm (T: the far end keeps streaming through the kill; S: it pauses while the client is silent) and repeat: PASS iff the first downstream packet after the peer removal arrives within `RECOVER_MAX`=90 s and `DecapStalled` = 0; a repeat that never recovers FAILs. Reconnects and probe rebinds are reported, not asserted.
 
 
 **Why it exists.** This is the user's "intermittent loss of connection". On 2026-09-14 every one of ten reconnects died 3–7 s after `session is ready` (`DecapStalled`), then cost a 2-minute `Ping timed out` wait and a worker restart, about 3 minutes per cycle, ~70 % of the hour lost; arm S (quiet restart) had zero failures. On the datagram-relay exit the same reconnect under full load recovered in 4 s. T07-cold-start covers only the *first* connect and T23-sustained-soak only reaches a reconnect after ~30 minutes; neither exercises the reconnect path deliberately.
@@ -361,7 +361,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 **Pass criteria.** PASS iff the best warm download > 0 and the worst warm download across cells ≥ 0.3 × the best. Masking cell: PASS iff a cold download on the default ping tier completes within `CAP` (n = 1); FAIL when it does not but the raised ping tier's does.
 
 
-**Why it exists.** 2026-09-02: 48 Mb/s ≈ baseline and **96 Mb/s collapsed downloads** (established, then flatlined under a `frame discarded` storm: the SURB flood congests the path). 2026-09-14 `coldmain`: the 10 MB ping tier alone made the cold start pass, at the price of a ≈4 900-SURB readiness gate (≈30 s at 512 kb/s). And the raised ping tier is exactly the tuned config that masked the 0.96.1 ramp bug for a day (the masking cell below). The axis has a known cliff and a known mask; it belongs in the `deep` profile.
+**Why it exists.** 2026-09-02: 48 Mb/s ≈ baseline and **96 Mb/s collapsed downloads** (established, then flatlined under a `frame discarded` storm: the SURB flood congests the path). 2026-09-14 `coldmain`: the 10 MB ping tier alone made the cold start pass, at the price of a ≈4 900-SURB readiness gate (≈30 s at 512 kb/s). And the raised ping tier is exactly the tuned config that masked the 0.96.1 ramp bug for a day (the masking cell below). The axis has a known cliff and a known mask.
 
 ## T13-mtu-sweep: Tunnel MTU / datagram-size sweep  ·  **gate**
 
@@ -398,7 +398,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Question.** How long must a fresh session idle before it can carry full-rate traffic?
 
-**Method.** T04-fixed-throughput repeated across a sweep of `WAIT_AFTER_CONNECT` (e.g. 0, 5, 15, 30, 60, 120 s), holding everything else fixed. Plot first-transfer throughput against delay.
+**Method.** One download per idle delay in `DELAYS` after connect (ramp wait opted out), holding everything else fixed. Plot first-transfer throughput against delay.
 
 **Parameters.** `DELAYS`="0 5 15 30 60" s (`--fast` "0 5 20", `--very-fast` "0 5"), `KNEE_FRAC`=0.8, `KNEE_MAX_S`=30 s; each delay is a fresh connect with `ramp_wait_opt_out=True` followed by one download.
 
@@ -621,7 +621,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 **Pass criteria.** SKIP unless the client's curl reports HTTP3 and `TARGET_H3_PORT` is set; the h3 arm is not implemented, so the test SKIPs either way.
 
 
-**Why it exists.** All three were run in 2026-09-11/12 and none is a lever: HTTP/3 downloads were half of HTTP/1.1 (median ratio 0.50) and its uploads acked 4/40 versus 36/40; after 3 minutes idle downloads were *slower* in 30/40; BBR/CUBIC was a coin flip (0.94, 15 faster / 19 slower). The SURB-metered return path sets download throughput regardless. Keeping the test in the `deep` profile stops the axis being re-tested from scratch on every new release.
+**Why it exists.** All three were run in 2026-09-11/12 and none is a lever: HTTP/3 downloads were half of HTTP/1.1 (median ratio 0.50) and its uploads acked 4/40 versus 36/40; after 3 minutes idle downloads were *slower* in 30/40; BBR/CUBIC was a coin flip (0.94, 15 faster / 19 slower). The SURB-metered return path sets download throughput regardless. Keeping the test as a runbook item stops the axis being re-tested from scratch on every new release.
 
 **QUIC measurement traps**. If the HTTP/3 arm is kept, three rules, each of which produced a wrong number first. Force `--http3-only` so a failure is hard rather than a silent fallback to HTTP/2. Do not read `size_upload` for a QUIC upload as a measurement: it counts bytes handed to the transport, so an upload without a 200 response is an upper bound. And a QUIC handshake started shortly after a capped download fails while the tunnel's return path is still draining, where TCP survives the same moment: allow a generous connect timeout plus one retry after a drain, and flag the retry in the record rather than dropping the sample.
 
@@ -676,7 +676,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Parameters.** `PAIRS`=6 (`--fast` 3), ABBA order, client restarted per arm with `net.ipv4.tcp_congestion_control` set to `cubic` or `bbr`; SKIP unless `bbr` is in the host's available congestion controls.
 
-**Pass criteria.** FAIL when no valid cubic/bbr pair was measured (a failed restart or connect leaves an arm at 0 and it is dropped from the pairs) or when a client restart fails; the default client is restored whatever happens. Otherwise PASS, recording the bbr/cubic paired ratio and sign count for upload (treated) and download (control) and the number of pairs.
+**Pass criteria.** As a runbook item its FAIL is emitted as WARN. WARN when no valid cubic/bbr pair was measured (a failed restart or connect leaves an arm at 0 and it is dropped from the pairs) or when a client restart fails, with a summary row saying the A/B was abandoned; the default client is restored whatever happens. Otherwise PASS, recording the bbr/cubic paired ratio and sign count for upload (treated) and download (control) and the number of pairs.
 
 
 **Why it exists.** 2026-09-02: BBR + fq on the client host raised upload from 5.4 → 8.1 Mbit/s (NL) and 5.0 → 5.6 (USA); the nightly A/B then held at +82 % upload with 13/13 pairs agreeing (p = 0.0002) while download stayed null (+4 %, 8/13, p = 0.58). It is the only client-side no-build lever found in two weeks, and it silently inflates every upload figure recorded after the host was switched (R2 already cites it; the catalogue had no test that produces it). 2026-09-06 qualified it: the win is the path, not the machine, so it must be re-measured per exit rather than assumed.
@@ -734,6 +734,8 @@ There is one run. `just suite` executes t01 to t24 in one fixed order every time
 **Every test is a module in `scripts/suite/tests/` and runs by being there**; runbook items are excluded by their `KIND`, not by a list. Under the old bash runner a test had to be in one of two lists, and one in neither was dead code that still looked maintained: T19-background-load and T20-fault-injection sat in no list from the restructure until 2026-09-17, so contending-load and relay-fault coverage silently never ran.
 
 **Shortening a run.** `--fast` substitutes the catalogue's own shorter durations (the values in parentheses in each entry) and never drops a sustained arm below 90 s. `--very-fast` cuts every long step to the shortest setting that still exercises its mechanism, 15 s arms and 2 MB transfers, takes about 50 minutes for the whole suite, and cannot see anything that needs a long session, such as a reconnect cycle on the order of a minute; never conclude "healthy" from it. `--only tNN,tNN` and `--skip tNN` are for working on one test; `--only` still runs T01-topology-preconditions first unless it is skipped explicitly, because a leftover qdisc or a missing liveness-ping alias poisons one test as surely as a run. A per-test knob is `T<NN>_<VAR>=…` in the environment (`T23_DUR=150`), and it overrides `--very-fast`.
+
+**Open items from the liveness-ping artifact.** Measured before the server carried the alias and therefore unattributed until rerun with it: the 1-hour T23-sustained-soak going dead at +21 min, parallel flows not scaling in T05-loaded-latency, T22-concurrent-clients not completing, and the intermittent 152 s recovery in T10-forced-reconnect. No full-length (non `--fast`) pytest run existed as of 2026-09-21.
 
 **Run ids.** Results go to `SUITE_OUT_DIR/<run-id>/` (`--run-id`, default a timestamp) with `rows.jsonl`, `verdicts.jsonl`, `provenance.json`, `summary.csv`, `run.txt`, `console.log`, `logs/` and `samples/`. A run id that already holds results is refused, because two runs once shared one and their verdicts blended into one file.
 
