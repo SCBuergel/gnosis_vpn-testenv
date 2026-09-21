@@ -4,14 +4,17 @@ was harmful (a long post-connect idle lets the return-path SURBs expire, so the 
 a tunnel-ping reconnect, 8/8 on two hoprd versions). The cold arm opts out of the ramp wait: measuring the ramp is
 its job. The cold-start signal is a COLLAPSE (no completion, decap errors, a reconnect), not that the cold arm is
 slower: a fresh session measures the SURB ramp, whose first transfer is ~0.5x steady state by design (0.48, 0.34
-and 0.25 measured on clean cold starts), so the ratio is recorded with COLD_WARM_FIRST_RATIO as a reference."""
+and 0.25 measured on clean cold starts), so the ratio is recorded with COLD_WARM_FIRST_RATIO as a reference.
+Gate: zero reconnects in both arms, the cold arm completes at least as many downloads as the warm one, and the
+cold arm's decapsulation errors stay under max(COLD_DECAP_FLOOR, COLD_DECAP_MULT x the warm arm's). Medians are
+recorded, not gated."""
 from suitelib.client import connect_or_fail
 from suitelib.config import q
 from suitelib.target import summary_row, transfer_series
 
 TEST = "T07-cold-start"
 KIND = "gate"
-KNOBS = dict(WARM=q(25, 25), COLD_WARM_FIRST_RATIO=0.35, COLD_WARM_MEDIAN_MULT=2, COLD_WARM_MEDIAN_FLOOR=5)
+KNOBS = dict(WARM=q(25, 25), COLD_WARM_FIRST_RATIO=0.35, COLD_DECAP_MULT=2, COLD_DECAP_FLOOR=5)
 
 
 def test_cold_start(cfg, client, cluster, target, checks, knobs):
@@ -49,5 +52,5 @@ def test_cold_start(cfg, client, cluster, target, checks, knobs):
     checks.record(f"cold/warm first-transfer ratio {ratio} (the SURB ramp; 0.48, 0.34 and 0.25 measured on clean cold starts, so it is "
                   f"recorded, not gated; COLD_WARM_FIRST_RATIO={k.COLD_WARM_FIRST_RATIO} is the value below which it is worth a look)")
     ok = (ce["reconnects"] == 0 and we["reconnects"] == 0 and cs["down_complete"] >= ws["down_complete"]
-          and ce["decap_error"] <= max(k.COLD_WARM_MEDIAN_FLOOR, k.COLD_WARM_MEDIAN_MULT * we["decap_error"]))
+          and ce["decap_error"] <= max(k.COLD_DECAP_FLOOR, k.COLD_DECAP_MULT * we["decap_error"]))
     checks.verdict(ok, msg)

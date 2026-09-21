@@ -80,7 +80,7 @@ just down
 ```sh
 just up                                  # build + cluster + servers + metrics + gen-config + client
 just e2e                                 # every destination the client reports
-just e2e --fast                         # short profile, a couple of minutes
+just e2e --quick                        # short profile, a couple of minutes
 just e2e --destination node-<peer-id>    # a single destination
 just down
 ```

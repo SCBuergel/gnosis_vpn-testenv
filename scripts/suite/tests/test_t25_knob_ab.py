@@ -9,7 +9,7 @@ from suitelib.target import summary_row, transfer_series
 
 TEST = "T25-knob-ab"
 KIND = "runbook"
-KNOBS = dict(KNOB=f"HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY={os.cpu_count() * 8}", CLIENT_KNOB="")
+KNOBS = dict(KNOB=f"HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY={(os.cpu_count() or 1) * 8}", CLIENT_KNOB="")
 
 
 def test_knob_ab(cfg, client, target, checks, knobs):

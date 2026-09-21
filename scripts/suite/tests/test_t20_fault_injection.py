@@ -33,10 +33,14 @@ def test_fault_injection(cfg, run, client, live_cluster, target, checks, knobs):
             pass
 
     try:
-        tc("qdisc", "add", "dev", iface, "root", "handle", "1:", "prio")
-        tc("qdisc", "add", "dev", iface, "parent", "1:3", "handle", "30:", "netem", "loss", "0%")
-        tc("filter", "add", "dev", iface, "protocol", "ip", "parent", "1:0", "prio", "1", "u32", "match", "ip", "dport", str(port),
-           "0xffff", "flowid", "1:3")
+        for step in (("qdisc", "add", "dev", iface, "root", "handle", "1:", "prio"),
+                     ("qdisc", "add", "dev", iface, "parent", "1:3", "handle", "30:", "netem", "loss", "0%"),
+                     ("filter", "add", "dev", iface, "protocol", "ip", "parent", "1:0", "prio", "1", "u32", "match", "ip", "dport",
+                      str(port), "0xffff", "flowid", "1:3")):
+            r = tc(*step)
+            if r.returncode != 0:
+                # an unimpaired tunnel would still "survive" and PASS; say why nothing was measured instead
+                checks.skip(f"tc setup failed ({' '.join(step[:2])}): {(r.stderr or r.stdout).strip()[:160]}")
         s = connect_or_fail(checks, client, cfg.dest, 15)
         if not s:
             return

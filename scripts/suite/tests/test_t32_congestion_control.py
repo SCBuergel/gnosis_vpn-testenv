@@ -24,9 +24,14 @@ def test_congestion_control(cfg, client, target, checks, knobs):
     cwd = str(cfg.testenv_dir)
 
     def restart_cc(cc):
-        shell.run("just client-stop", timeout=120, cwd=cwd)
-        shell.run("just client-start", timeout=300, cwd=cwd, env={**os.environ, "CLIENT_SYSCTL": f"net.ipv4.tcp_congestion_control={cc}"})
-        client.wait_worker(180)
+        env = dict(os.environ)
+        if cc:
+            env["CLIENT_SYSCTL"] = f"net.ipv4.tcp_congestion_control={cc}"
+        ok = shell.ok("just client-stop", timeout=120, cwd=cwd) and shell.ok("just client-start", timeout=300, cwd=cwd, env=env)
+        ok = ok and client.wait_worker(180) and client.wait_dest_ready(cfg.dest, 600)
+        if not ok:
+            checks.failed(f"client restart with congestion control '{cc or 'default'}' failed")
+        return ok
 
     def measure():
         try:
@@ -41,20 +46,24 @@ def test_congestion_control(cfg, client, target, checks, knobs):
         return (d["mbit"], u["mbit"])
 
     a, b = [], []
-    for p in range(1, knobs.PAIRS + 1):
-        for cc in (("cubic", "bbr") if p % 2 else ("bbr", "cubic")):
-            restart_cc(cc)
-            (a if cc == "cubic" else b).append(measure())
-    shell.run("just client-stop", timeout=120, cwd=cwd)
-    shell.run("just client-start", timeout=300, cwd=cwd)
-    client.wait_worker(180)
+    try:
+        for p in range(1, knobs.PAIRS + 1):
+            for cc in (("cubic", "bbr") if p % 2 else ("bbr", "cubic")):
+                if not restart_cc(cc):
+                    break
+                (a if cc == "cubic" else b).append(measure())
+    finally:
+        restart_cc("")       # the default client, whatever happened above
 
     def cmp(idx):
-        ra = [y[idx] / x[idx] for x, y in zip(a, b) if x[idx] > 0]
+        ra = [y[idx] / x[idx] for x, y in zip(a, b) if x[idx] > 0 and y[idx] > 0]
         return {"median_ratio_bbr_over_cubic": round(st.median(ra), 3) if ra else None, "bbr_faster": sum(1 for r in ra if r > 1), "n": len(ra)}
 
     res = {"upload": cmp(1), "download_control": cmp(0), "pairs": min(len(a), len(b))}
     checks.row(kind="summary", result=res)
     up, dn = res["upload"], res["download_control"]
+    if up["n"] == 0:
+        checks.failed(f"no valid cubic/bbr pair measured ({len(a)} cubic and {len(b)} bbr arms attempted); no A/B result")
+        return
     checks.passed(f"upload bbr/cubic {up['median_ratio_bbr_over_cubic']} ({up['bbr_faster']}/{up['n']} bbr faster); download control "
-                  f"{dn['median_ratio_bbr_over_cubic']} ({dn['bbr_faster']}/{dn['n']})")
+                  f"{dn['median_ratio_bbr_over_cubic']} ({dn['bbr_faster']}/{dn['n']}); pairs {res['pairs']}")

@@ -39,10 +39,14 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
             port, ip = r.get("port"), r.get("ip")
             if port:
                 cluster.api(0, "DELETE", f"/api/v4/session/udp/{ip}/{port}")
-                checks.passed(f"1-hop session node0->(relay)->node{j} established in {dt} ms")
+            ok = bool(port) and dt <= k.FWD_TIMEOUT * 1000
+            if ok:
+                checks.passed(f"1-hop session node0->(relay)->node{j} established in {dt} ms (FWD_TIMEOUT={k.FWD_TIMEOUT}s)")
+            elif port:
+                checks.failed(f"1-hop session node0->(relay)->node{j} took {dt} ms > FWD_TIMEOUT={k.FWD_TIMEOUT}s")
             else:
                 checks.failed(f"1-hop session node0->(relay)->node{j} failed after {dt} ms: {str(r)[:160]}")
-            checks.row(check="forwarding_probe", dest_node=j, ms=dt, ok=bool(port))
+            checks.row(check="forwarding_probe", dest_node=j, ms=dt, ok=ok)
     # client side
     if not client.wait_worker(120):
         checks.failed("client worker offline")

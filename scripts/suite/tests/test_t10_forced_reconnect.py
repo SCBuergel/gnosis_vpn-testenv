@@ -44,10 +44,17 @@ def test_forced_reconnect(cfg, run, client, target, checks, knobs):
                 client.probe_bg("callprobe", out, host=target.ip, port=target.call_port, sid=sid, duration=k.DUR, iface=s.iface,
                                 idle_pause=(arm == "S"))
                 time.sleep(k.T_KILL)
-                # remove our peer on the server so the tunnel dies from the outside
+                # remove OUR peer on the server so the tunnel dies from the outside; never every peer, other clients
+                # (T22's extras) may be connected and their sessions are not this test's subject
+                pub = client.out(f"wg show {s.iface} public-key")
+                if not pub:
+                    checks.failed(f"arm {arm} rep {rep}: could not read the client's WireGuard public key on {s.iface}")
+                    continue
                 t_kill = time.time()
-                shell.run(["docker", "exec", cfg.server, "sh", "-c",
-                           "wg show wggvpn peers | while read p; do wg set wggvpn peer $p remove; done"], timeout=60)
+                r = shell.run(["docker", "exec", cfg.server, "wg", "set", "wggvpn", "peer", pub, "remove"], timeout=60)
+                if r.returncode != 0:
+                    checks.failed(f"arm {arm} rep {rep}: removing peer {pub[:12]}... on the server failed: {r.stderr.strip()[:120]}")
+                    continue
                 time.sleep(k.DUR - k.T_KILL + 20)
                 e = s.errors()
                 s.save_log(out)

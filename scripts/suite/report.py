@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """report.py RUN_DIR... — one Markdown table of verdicts per test across runs/cells (later runs of the same
-cell+test override earlier ones), plus a per-cell PASS/WARN/FAIL/SKIP count. Reads verdicts.jsonl."""
+cell+test override earlier ones), plus a per-cell count by status (FAIL, XPASS, WARN, XFAIL, PASS, RECORDED, SKIP;
+a test shows its worst status). Reads verdicts.jsonl."""
 import sys, json, glob, os, collections
 runs = []
 for arg in sys.argv[1:]:
@@ -18,15 +19,19 @@ for run in runs:
         best[k] = lst
         if k not in order: order.append(k)
 cells = sorted({k[0] for k in best}); tests = sorted({k[1] for k in best})
+# one cell per (cell, test): the worst status wins, and every status the suite emits is named rather than folded into SKIP
+ORDER = ("FAIL", "XPASS", "WARN", "XFAIL", "PASS", "RECORDED", "SKIP")
+
+
 def status(lst):
     s = {x["status"] for x in lst}
-    return "FAIL" if "FAIL" in s else "WARN" if "WARN" in s else "PASS" if "PASS" in s else "SKIP"
+    return next((st for st in ORDER if st in s), "/".join(sorted(s)))
 print("| test | " + " | ".join(cells) + " |"); print("|---|" + "---|" * len(cells))
 for t in tests:
     print(f"| {t} | " + " | ".join(status(best[(c,t)]) if (c,t) in best else "–" for c in cells) + " |")
 print()
 for c in cells:
-    cnt = collections.Counter(status(best[(c,t)]) for t in tests if (c,t) in best)
+    cnt = collections.Counter(status(best[(c,t)]) for t in tests if (c,t) in best)   # per test, worst status
     print(f"**{c}**: " + ", ".join(f"{k} {v}" for k, v in sorted(cnt.items())))
 print()
 for c in cells:

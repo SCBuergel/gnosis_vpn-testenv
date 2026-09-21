@@ -19,6 +19,7 @@ def test_warmup_knee(cfg, client, target, checks, knobs):
     for d in delays:
         s = connect_or_fail(checks, client, cfg.dest, int(d), label=f"delay {d}", ramp_wait_opt_out=True)
         if not s:
+            vals.append(None)      # keep the delay/value pairing; a failed delay is a hole, not a shift
             continue
         with s:
             client.persec_start(f"t15-{d}")
@@ -29,8 +30,9 @@ def test_warmup_knee(cfg, client, target, checks, knobs):
         vals.append(r["mbit"])
         checks.log(f"delay {d} s -> {r['mbit']} Mbit/s complete={r['complete']}")
     st = stats(vals)
-    best = max(vals) if vals else 0
-    knee = next((d for d, v in zip(delays, vals) if best > 0 and v >= k.KNEE_FRAC * best), "beyond-sweep")
+    measured = [v for v in vals if v is not None]
+    best = max(measured) if measured else 0
+    knee = next((d for d, v in zip(delays, vals) if v is not None and best > 0 and v >= k.KNEE_FRAC * best), "beyond-sweep")
     checks.row(kind="summary", stats=st, delays=k.DELAYS, knee_s=knee, first_transfer_mbit=" ".join(str(v) for v in vals))
     checks.record(f"warm-up knee at {knee}s idle (first transfer reaches {k.KNEE_FRAC} of best); Mbit/s over delays [{k.DELAYS}]: "
                   + " ".join(str(v) for v in vals))

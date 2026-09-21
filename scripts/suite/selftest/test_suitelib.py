@@ -26,7 +26,7 @@ def last_verdict(rundir):
 
 def test_stats_median_and_stdev():
     s = stats([1, 2, 3, 4, 5])
-    assert s["median"] == 3 and s["n"] == 5 and s["stdev"] > 0
+    assert s["median"] == 3 and s["n"] == 5 and s["stdev"] == pytest.approx(1.414, abs=1e-3) and s["mean"] == 3
 
 
 def test_stats_ignores_na():
