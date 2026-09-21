@@ -29,6 +29,18 @@ def recovery_s(csv_path, t_kill):
     return None
 
 
+def server_peer_for(server, tun_ip):
+    """The public key of the wggvpn peer whose allowed-ips hold tun_ip, from `wg show wggvpn dump` on the exit."""
+    if not tun_ip:
+        return ""
+    dump = shell.out(["docker", "exec", server, "wg", "show", "wggvpn", "dump"], timeout=30)
+    for line in dump.splitlines()[1:]:
+        f = line.split("\t")
+        if len(f) > 3 and any(a.split("/")[0] == tun_ip for a in f[3].split(",")):
+            return f[0]
+    return ""
+
+
 def test_forced_reconnect(cfg, run, client, target, checks, knobs):
     k = knobs
     if not shell.ok(["docker", "container", "inspect", cfg.server], timeout=30):
@@ -45,10 +57,13 @@ def test_forced_reconnect(cfg, run, client, target, checks, knobs):
                                 idle_pause=(arm == "S"))
                 time.sleep(k.T_KILL)
                 # remove OUR peer on the server so the tunnel dies from the outside; never every peer, other clients
-                # (T22's extras) may be connected and their sessions are not this test's subject
-                pub = client.out(f"wg show {s.iface} public-key")
+                # (T22's extras) may be connected and their sessions are not this test's subject. The client's WireGuard
+                # is a userspace implementation over a TUN device, so `wg show` inside the container sees nothing; the
+                # peer is identified on the server by its allowed-ips, which is the client's own tunnel address.
+                tun_ip = client.out(f"ip -4 -o addr show dev {s.iface} | awk '{{print $4}}' | cut -d/ -f1")
+                pub = server_peer_for(cfg.server, tun_ip)
                 if not pub:
-                    checks.failed(f"arm {arm} rep {rep}: could not read the client's WireGuard public key on {s.iface}")
+                    checks.failed(f"arm {arm} rep {rep}: no peer on the exit's wggvpn has allowed-ips {tun_ip or '?'} (the client's tunnel address)")
                     continue
                 t_kill = time.time()
                 r = shell.run(["docker", "exec", cfg.server, "wg", "set", "wggvpn", "peer", pub, "remove"], timeout=60)

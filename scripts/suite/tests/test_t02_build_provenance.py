@@ -1,5 +1,7 @@
-"""T02-build-provenance: version strings and the compiled-in HOPR wire-protocol identifiers of client worker,
-hoprd and server; asserts one protocol id across the stack. Writes provenance.json."""
+"""T02-build-provenance: version strings and the compiled-in HOPR wire-protocol identifiers of the client worker
+and hoprd; asserts one protocol id across the two. The exit server drives its hoprd node over REST and embeds no
+wire-protocol id (checked: the binary holds no /hopr/ string), so its version is recorded and an id is compared
+only if a future build carries one. Writes provenance.json."""
 import hashlib
 import json
 import time
@@ -41,12 +43,14 @@ def test_build_provenance(cfg, run, client, checks, knobs):
     print(json.dumps(d))
     checks.row(client=cv, client_protocol=cp, hoprd=hv, hoprd_protocol=hp, server=sv, server_protocol=sp)
     # a mismatch is the incompatibility this gate exists for; an unreadable id is a WARN because it cannot be judged
-    ids = {"client": cp, "hoprd": hp, "server": sp}
+    ids = {"client": cp, "hoprd": hp}
+    if sp:                       # the server embeds no id today; compare it only when a build carries one
+        ids["server"] = sp
     if all(ids.values()) and len(set(ids.values())) == 1:
-        checks.passed(f"one protocol id {cp} across client {cv}, hoprd {hv}, server {sv}")
+        checks.passed(f"one protocol id {cp} across client {cv}, hoprd {hv}" + (f", server {sv}" if sp else f" (server {sv} embeds none)"))
     elif all(ids.values()):
-        checks.failed(f"protocol id mismatch: client {cv} speaks {cp}, hoprd {hv} speaks {hp}, server {sv} speaks {sp}; a HOPR "
-                      f"packet's frame size is fixed, so mismatched versions misparse rather than refuse to connect")
+        checks.failed(f"protocol id mismatch: client {cv} speaks {cp}, hoprd {hv} speaks {hp}" + (f", server {sv} speaks {sp}" if sp else "")
+                      + "; a HOPR packet's frame size is fixed, so mismatched versions misparse rather than refuse to connect")
     else:
         missing = ", ".join(n for n, v in ids.items() if not v)
-        checks.warn(f"could not read a protocol id from {missing}: client '{cp}' hoprd '{hp}' server '{sp}' (client {cv}, hoprd {hv}, server {sv})")
+        checks.warn(f"could not read a protocol id from {missing}: client '{cp}' hoprd '{hp}' (client {cv}, hoprd {hv}, server {sv})")

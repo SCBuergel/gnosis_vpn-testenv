@@ -180,7 +180,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Parameters.** none.
 
-**Pass criteria.** PASS when the `/hopr/mix/<ver>` protocol id read from the client worker binary, the hoprd binary and the server binary (inside its container) are all present and equal; FAIL when all are present and any differs, which is the incompatibility the gate exists for; WARN when any cannot be read, naming which. It writes `provenance.json` for the run.
+**Pass criteria.** PASS when the `/hopr/mix/<ver>` protocol id read from the client worker binary and from the hoprd binary are both present and equal; FAIL when both are present and differ, which is the incompatibility the gate exists for; WARN when either cannot be read. The exit server embeds no such id (it drives its hoprd node over REST; its binary holds no `/hopr/` string), so its version is recorded and its id joins the comparison only if a future build carries one. It writes `provenance.json` for the run.
 
 
 **Why it exists.** A release's lockfile claimed a library version (from a different branch, with a wire-format-breaking change and a bumped protocol identifier) that was **not** in the shipped binary. Trusting it would have produced an entirely fictitious analysis. Reading the identifiers out of the binaries took one command and settled it. Since a HOPR packet's frame size is fixed independently of what is inside it, mismatched versions can misparse rather than fail to connect, which makes this check a genuine correctness guard rather than bookkeeping.
