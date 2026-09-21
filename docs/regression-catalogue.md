@@ -136,7 +136,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 | `MTU940_DOWN_MIN_MBIT` | 6 Mbit/s | T13-mtu-sweep download median at MTU 940 | 12.3 (full), 8.6 (very-fast, 2 MB) | under T04-fixed-throughput's floor because a 940 B MTU carries about a third more packets per byte |
 | `AGG_MIN_MBIT` | 8 Mbit/s | T22-concurrent-clients aggregate at the top rung | 16.1 at n=4 | below one client's rate, so it fires only on a collapse; completion and the one-sided drop rule do the finer work |
 | `TOL_PCT` | 25 % | T22-concurrent-clients drop from a lower rung to a higher one | aggregate rose 10.6 → 13.7 → 16.1 | outside the host's ±12-18 % repeatability, inside a real collapse |
-| `COLD_WARM_MEDIAN_MULT`, `COLD_WARM_MEDIAN_FLOOR` | 2, 5 Mbit/s | T07-cold-start cold median against the warm one | cold 9.7, warm 11.4 | a cold session may be slower, not collapsed |
+| `COLD_DECAP_MULT`, `COLD_DECAP_FLOOR` | 2, 5 errors | T07-cold-start cold-arm decapsulation errors against the warm arm's | 0 in both arms on the reference stack | a cold session may see a few, not a burst; medians are recorded, not gated |
 | `SPLIT_TOL_PCT` | 60 % | T08-relay-attribution return-path split at equal latency | 11.7 % skew | the split legitimately varies 51/49 to 85/15 across releases; 60 fails only a near-dead relay |
 | `UNSTABLE_PCT` | 50 % | T03-repeatability-baseline flag | 12.1 % | above it the stack cannot repeat its own numbers and every threshold verdict is weak evidence |
 | `LOG_MB_MIN_MAX` | 200 MB/min | T23-sustained-soak client log growth | 63-70 MB/min at path-planner debug | the incident was 1.6 GB/min; 200 is three times the normal rate |
@@ -148,9 +148,9 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Method.** Read the localcluster's status and every node's channel set, open a 1-hop UDP session from the exit node through each relay, wait for the client worker, for `DEST` to be Ready and for the client's own channel, read the server's `wggvpn` addresses against both liveness-ping targets, and check the host for leftover `netem` qdiscs and timers. Record the effective client config against the shipped defaults. Abort the suite rather than measure through a broken precondition. Channel balance and unexpected peers on the exit are not checked.
 
-**Parameters.** `FWD_TIMEOUT`=20 s (declared; the forwarding probe uses the 60 s API timeout), `READY_TIMEOUT`=300 s, `CLIENT_CHANNEL_TIMEOUT`=240 s, `CLUSTER_SIZE`=3, `PERIODIC_PING_TARGET`=10.128.0.1.
+**Parameters.** `FWD_TIMEOUT`=20 s (the forwarding probe must establish within it), `READY_TIMEOUT`=300 s, `CLIENT_CHANNEL_TIMEOUT`=240 s, `CLUSTER_SIZE`=3, `PERIODIC_PING_TARGET`=10.128.0.1.
 
-**Pass criteria.** FAIL, and the run aborts, unless all of: cluster state is `running`; every node reports `channels_open`; every node has at least `CLUSTER_SIZE`−1 = 2 outgoing channels in `Open`; with `CLUSTER_SIZE` ≥ 3, a 1-hop UDP session from node 0 to every other node establishes (its duration is recorded, not bounded); the client worker is online within 120 s; `DEST` (node-0) is Ready within `READY_TIMEOUT`=300 s; the client holds ≥ 1 outgoing channel within `CLIENT_CHANNEL_TIMEOUT`=240 s; both the configured `[connection.ping] address` and the client's hardcoded periodic liveness-ping target `PERIODIC_PING_TARGET`=10.128.0.1 are addresses on the server's `wggvpn` (client ≤ 0.96.3's `tunnel_ping_loop` ignores the configured one, and a missing target makes every session reconnect every ~85 s: two full runs were misread as a load defect on 2026-09-19 because of it); no `netem` qdisc is present on the host. WARN only: another destination not Ready; an armed suite or deadman timer. The effective-config diff against the shipped defaults is recorded, not asserted.
+**Pass criteria.** FAIL, and the run aborts, unless all of: cluster state is `running`; every node reports `channels_open`; every node has at least `CLUSTER_SIZE`−1 = 2 outgoing channels in `Open`; with `CLUSTER_SIZE` ≥ 3, a 1-hop UDP session from node 0 to every other node establishes within `FWD_TIMEOUT`=20 s (a later success is a FAIL naming the duration; the session is deleted either way); the client worker is online within 120 s; `DEST` (node-0) is Ready within `READY_TIMEOUT`=300 s; the client holds ≥ 1 outgoing channel within `CLIENT_CHANNEL_TIMEOUT`=240 s; both the configured `[connection.ping] address` and the client's hardcoded periodic liveness-ping target `PERIODIC_PING_TARGET`=10.128.0.1 are addresses on the server's `wggvpn` (client ≤ 0.96.3's `tunnel_ping_loop` ignores the configured one, and a missing target makes every session reconnect every ~85 s: two full runs were misread as a load defect on 2026-09-19 because of it); no `netem` qdisc is present on the host. WARN only: another destination not Ready; an armed suite or deadman timer. The effective-config diff against the shipped defaults is recorded, not asserted.
 
 
 **Further preconditions**, each from a separate incident:
@@ -180,7 +180,7 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Parameters.** none.
 
-**Pass criteria.** PASS when the `/hopr/mix/<ver>` protocol id read from the client worker binary and from the hoprd binary are both present and equal; FAIL when both are present and differ, which is the incompatibility the gate exists for; WARN when either cannot be read. It writes `provenance.json` for the run.
+**Pass criteria.** PASS when the `/hopr/mix/<ver>` protocol id read from the client worker binary, the hoprd binary and the server binary (inside its container) are all present and equal; FAIL when all are present and any differs, which is the incompatibility the gate exists for; WARN when any cannot be read, naming which. It writes `provenance.json` for the run.
 
 
 **Why it exists.** A release's lockfile claimed a library version (from a different branch, with a wire-format-breaking change and a bumped protocol identifier) that was **not** in the shipped binary. Trusting it would have produced an entirely fictitious analysis. Reading the identifiers out of the binaries took one command and settled it. Since a HOPR packet's frame size is fixed independently of what is inside it, mismatched versions can misparse rather than fail to connect, which makes this check a genuine correctness guard rather than bookkeeping.
@@ -261,9 +261,9 @@ Entries follow in test-ID order, which is the run's execution order: T01–T24 a
 
 **Method.** Two otherwise identical T04-fixed-throughput runs: `WAIT_AFTER_CONNECT=0` (cold) and `WARM`=25 s (warm). Compare completion counts and error counters, not just throughput.
 
-**Parameters.** `WARM`=25 s idle for the warm arm; the cold arm idles 0 s with `RAMP_WAIT_OPT_OUT=1`; `REPS` transfers per arm (`--fast` 1); `COLD_WARM_FIRST_RATIO`=0.35, `COLD_WARM_MEDIAN_MULT`=2, `COLD_WARM_MEDIAN_FLOOR`=5 Mbit/s.
+**Parameters.** `WARM`=25 s idle for the warm arm; the cold arm idles 0 s with `RAMP_WAIT_OPT_OUT=1`; `REPS` transfers per arm (`--fast` 1); `COLD_WARM_FIRST_RATIO`=0.35, `COLD_DECAP_MULT`=2, `COLD_DECAP_FLOOR`=5.
 
-**Pass criteria.** PASS iff cold `reconnects` = 0 and warm `reconnects` = 0 and cold download completions ≥ warm completions and cold median download ≤ max(`COLD_WARM_MEDIAN_FLOOR`=5 Mbit/s, `COLD_WARM_MEDIAN_MULT`=2 × warm median). The cold/warm first-transfer ratio is RECORDED with `COLD_WARM_FIRST_RATIO`=0.35 as a reference, not gated: three clean cold starts measured 0.48, 0.34 and 0.25 and every threshold tried failed a healthy one. The exit's `hopr_session_surb_target_buffer` at cold load start is recorded, not asserted. The first-transfer ratio is deliberately loose: a fresh 0.96.x session measures the SURB ramp, whose first transfer is about half of steady state by design (see T15-warmup-knee), so the real cold-start signal is completion with zero decap and zero reconnect, not the cold arm matching the warm one. A ratio near the expected ~0.5 ramp ratio would fail every healthy cold start.
+**Pass criteria.** PASS iff cold `reconnects` = 0 and warm `reconnects` = 0 and cold download completions ≥ warm completions and cold-arm decapsulation errors ≤ max(`COLD_DECAP_FLOOR`=5, `COLD_DECAP_MULT`=2 × the warm arm's). The cold and warm medians are recorded, not gated (until 2026-09-21 the knobs were named as if they bounded the medians while the code bounded the decapsulation errors). The cold/warm first-transfer ratio is RECORDED with `COLD_WARM_FIRST_RATIO`=0.35 as a reference, not gated: three clean cold starts measured 0.48, 0.34 and 0.25 and every threshold tried failed a healthy one. The exit's `hopr_session_surb_target_buffer` at cold load start is recorded, not asserted. The first-transfer ratio is deliberately loose: a fresh 0.96.x session measures the SURB ramp, whose first transfer is about half of steady state by design (see T15-warmup-knee), so the real cold-start signal is completion with zero decap and zero reconnect, not the cold arm matching the warm one. A ratio near the expected ~0.5 ramp ratio would fail every healthy cold start.
 
 
 **Not implemented in the script; kept as the design notes they are**:
@@ -328,7 +328,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Parameters.** `DUR`=300 s call (`--fast` 150, `--very-fast` 130), `T_KILL`=60 s (`--very-fast` 20), `RECOVER_MAX`=90 s, `REPEATS`=3 per arm (`--fast` and `--very-fast` 1). `DUR` − `T_KILL` must exceed `RECOVER_MAX`: with a working liveness ping the client notices a removed peer only after three ping cycles, about 75 s, so a 70 s window reads as "never recovered" (seen at `--very-fast` on 2026-09-19).
 
-**Pass criteria.** Per arm (T: the far end keeps streaming through the kill; S: it pauses while the client is silent) and repeat: PASS iff the first downstream packet after the peer removal arrives within `RECOVER_MAX`=90 s and `DecapStalled` = 0; a repeat that never recovers FAILs. Reconnects and probe rebinds are reported, not asserted.
+**Pass criteria.** The peer removed on the exit is the client's own (its WireGuard public key read from the tunnel interface), never every peer, so other clients' sessions are untouched; a repeat whose key cannot be read or whose removal fails FAILs. Per arm (T: the far end keeps streaming through the kill; S: it pauses while the client is silent) and repeat: PASS iff the first downstream packet after the peer removal arrives within `RECOVER_MAX`=90 s and `DecapStalled` = 0; a repeat that never recovers FAILs. Reconnects and probe rebinds are reported, not asserted.
 
 
 **Why it exists.** This is the user's "intermittent loss of connection". On 2026-09-14 every one of ten reconnects died 3–7 s after `session is ready` (`DecapStalled`), then cost a 2-minute `Ping timed out` wait and a worker restart, about 3 minutes per cycle, ~70 % of the hour lost; arm S (quiet restart) had zero failures. On the datagram-relay exit the same reconnect under full load recovered in 4 s. T07-cold-start covers only the *first* connect and T23-sustained-soak only reaches a reconnect after ~30 minutes; neither exercises the reconnect path deliberately.
@@ -472,9 +472,9 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Method.** Two clients on one exit. The active one runs a T04-fixed-throughput transfer; the neighbour is idle in the control arm, then fetches a small object (`TRICKLES`: 10 kB, then 100 kB) every 2 s in the load arms. Report the active client's throughput and completion per arm.
 
-**Parameters.** `TRICKLES`="10 100" kB fetched every 2 s by the neighbour (`--very-fast` 100); SKIP unless `CLIENT2` is running.
+**Parameters.** `TRICKLES`="10 100" kB fetched every 2 s by the neighbour (`--very-fast` 100), `STEP_FRAC`=0.5; SKIP unless `CLIENT2` is running.
 
-**Pass criteria.** none. always PASS; records client 1's download rate with an idle neighbour and under each trickle size.
+**Pass criteria.** As a diagnostic it never fails the run. WARN when the idle control does not complete, or when any trickle arm's download is incomplete or below `STEP_FRAC`=0.5 × the idle control's rate (the step change the test exists for); PASS otherwise, always recording client 1's rate with an idle neighbour and under each trickle size with its ratio to idle.
 
 
 **Why it exists.** Measured on four 2-slot exits: an idle neighbour let the active download finish at 4.4–6.6 Mbit/s; a 10 kB/2 s trickle cut it to 1.4–2.0 and it hit the cap, and **100 kB every 2 s, ten times the bytes, changed nothing further**. Uploads were untouched (7.8–8.5 under load). The scarce resource is return-path capacity spent *per request*, not per byte, which no per-byte capacity model predicts. It is also the most realistic multi-user scenario there is, and far cheaper than T22-concurrent-clients.
@@ -486,7 +486,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Method.** Establish a session under steady T06-realtime-udp load, then at a fixed offset impair **one** relay of the return set: a `tc netem` loss ladder (1, 5, 20 %), then a full pause of the relay process (SIGSTOP for `STEP_S`), then restore. Record time-to-detect, whether the session survives, time-to-recover, and whether the *forward* direction degrades too.
 
-**Parameters.** `LOSSES`="1 5 20" % (`--very-fast` 5), `STEP_S`=60 s per step (`--fast` 30, `--very-fast` 12), `RELAY`=1; the call lasts (1 + number of loss values + 3) × `STEP_S`, which is the ladder's own length (until 2026-09-20 it was computed from the length of the `LOSSES` string, so the call outran the script and every run printed an empty call loss); SKIP unless running as root.
+**Parameters.** `LOSSES`="1 5 20" % (`--very-fast` 5), `STEP_S`=60 s per step (`--fast` 30, `--very-fast` 12), `RELAY`=1; the call lasts (1 + number of loss values + 3) × `STEP_S`, which is the ladder's own length (until 2026-09-20 it was computed from the length of the `LOSSES` string, so the call outran the script and every run printed an empty call loss); SKIP unless running as root, and SKIP naming the step when any `tc` qdisc or filter cannot be installed (an unimpaired tunnel would otherwise survive and PASS).
 
 **Pass criteria.** PASS iff the client is still connected after the loss ladder and a `STEP_S` SIGSTOP of the relay; as a diagnostic, a miss is WARN. Call loss, stalls and reconnects are reported, not asserted.
 
@@ -676,7 +676,7 @@ resolved return path direction="return" destination=0x74d5…a237 index=0 path=v
 
 **Parameters.** `PAIRS`=6 (`--fast` 3), ABBA order, client restarted per arm with `net.ipv4.tcp_congestion_control` set to `cubic` or `bbr`; SKIP unless `bbr` is in the host's available congestion controls.
 
-**Pass criteria.** none. always PASS; records the bbr/cubic paired ratio and sign count for upload (treated) and download (control).
+**Pass criteria.** FAIL when no valid cubic/bbr pair was measured (a failed restart or connect leaves an arm at 0 and it is dropped from the pairs) or when a client restart fails; the default client is restored whatever happens. Otherwise PASS, recording the bbr/cubic paired ratio and sign count for upload (treated) and download (control) and the number of pairs.
 
 
 **Why it exists.** 2026-09-02: BBR + fq on the client host raised upload from 5.4 → 8.1 Mbit/s (NL) and 5.0 → 5.6 (USA); the nightly A/B then held at +82 % upload with 13/13 pairs agreeing (p = 0.0002) while download stayed null (+4 %, 8/13, p = 0.58). It is the only client-side no-build lever found in two weeks, and it silently inflates every upload figure recorded after the host was switched (R2 already cites it; the catalogue had no test that produces it). 2026-09-06 qualified it: the win is the path, not the machine, so it must be re-measured per exit rather than assumed.
