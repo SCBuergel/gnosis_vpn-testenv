@@ -740,9 +740,20 @@ suite *args:
     eval "$(just _suite-env)"
     exec python3 "{{justfile_directory()}}/scripts/suite/run.py" {{args}}
 
-# Offline self-tests of the suite library (no stack needed)
+# Offline self-tests: the suite library, and every probe against every target service on loopback (no stack needed)
 suite-selftest:
     python3 -m pytest "{{justfile_directory()}}/scripts/suite/selftest" -q
+
+# The daily battery: build the latest checkout of every component, bring the stack up, run the suite (--fast by
+# default; pass e.g. "--very-fast" or "--run-id nightly-$(date +%F)"), take it down. Exit code is the suite's.
+# Schedule it with a systemd timer that runs `just nightly` from a checkout whose sibling repos track the release branches.
+nightly *args="--fast":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    just build && just up-nobuild && sleep 180 || { echo "stack failed to come up" >&2; exit 2; }
+    just suite {{args}}; rc=$?
+    just down >/dev/null 2>&1 || true
+    exit $rc
 
 # Bring the stack up without building (pre-built binaries and images), including target and client
 up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config target-start clients-start

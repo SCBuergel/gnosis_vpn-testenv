@@ -18,6 +18,9 @@ class Cluster:
         self.size = cfg.cluster_size
 
     def available(self):
+        """False on a production-network run (--no-cluster) or when the localcluster binary/status is not there."""
+        if self.cfg.no_cluster:
+            return False
         return Path(self.bin).exists() and self.status() is not None
 
     def status(self):
@@ -137,8 +140,31 @@ class Cluster:
 
     # -- sampler ---------------------------------------------------------------------------------------------
     def sampler(self, run, name, interval=1, containers=()):
-        """Context manager: node metrics + per-pid CPU + container CPU at `interval` s to samples/NAME.jsonl."""
+        """Context manager: node metrics + per-pid CPU + container CPU at `interval` s to samples/NAME.jsonl.
+        Without a localcluster it samples nothing and rows() is empty."""
+        if not self.available():
+            return NullSampler(run, name)
         return NodeSampler(self, run, name, interval, containers)
+
+
+class NullSampler:
+    def __init__(self, run, name):
+        self.path = run / "samples" / f"{name}.jsonl"
+
+    def start(self):
+        return self
+
+    def stop(self):
+        pass
+
+    def rows(self):
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class NodeSampler:

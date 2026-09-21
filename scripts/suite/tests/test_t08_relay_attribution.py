@@ -38,6 +38,9 @@ def test_relay_attribution(cfg, client, cluster, target, checks, knobs):
                 by[hops[0].lower()] += 1
                 total += 1
     split = {"total": total, "by_relay": dict(by)}
+    if not cluster.available():
+        checks.row(split=split, download=r)
+        return checks.record(f"no localcluster: return-path split {dict(by)} recorded, membership not checked")
     me = cluster.address(0).lower()
     exits = [c["peerAddress"].lower() for c in cluster.open_outgoing(0)] + [me]
     checks.row(split=split, exit_open_outgoing=exits, download=r, equal_latency=k.SUITE_EQUAL_LATENCY)

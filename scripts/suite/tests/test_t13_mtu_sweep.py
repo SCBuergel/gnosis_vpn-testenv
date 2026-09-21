@@ -11,6 +11,7 @@ from suitelib.target import summary_row, transfer_series
 TEST = "T13-mtu-sweep"
 KIND = "gate"
 KNOBS = dict(MTUS="1420 1280 940", STREAM_S=q(120, 120), FIXED_BY="hoprnet#8392", MTU940_DOWN_MIN_MBIT=6)
+TIMEOUT = lambda k: len(k.words("MTUS")) * (k.STREAM_S + 1200)   # seconds; the harness fails the test past this
 
 
 def test_mtu_sweep(cfg, run, client, target, checks, knobs):

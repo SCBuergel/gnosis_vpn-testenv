@@ -15,6 +15,7 @@ from suitelib.target import curl_down
 TEST = "T12-balancer-sweep"
 KIND = "gate"
 KNOBS = dict(UPSTREAMS=q("12 16 48 96", "16 96"), PASSES=q(2, 1))
+TIMEOUT = lambda k: (k.PASSES * (len(k.words("UPSTREAMS")) + 1) + 2) * 1500   # seconds; the harness fails the test past this
 RAISED_PING = ("[connection.surb_balancing.ping]", "enabled = true", 'buffer = "10 MB"', 'max_surb_upstream = "16 Mb/s"')
 
 

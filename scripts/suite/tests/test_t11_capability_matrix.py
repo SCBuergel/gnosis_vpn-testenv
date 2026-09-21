@@ -21,7 +21,8 @@ CELLS = [("default", '["segmentation", "no_delay"]', 1),
          ("no-rate-control", '["segmentation", "no_delay", "no_rate_control"]', 0)]
 
 
-def test_capability_matrix(cfg, run, client, cluster, target, checks, knobs):
+def test_capability_matrix(cfg, run, client, live_cluster, target, checks, knobs):
+    cluster = live_cluster
     k = knobs
     cfg_file = cfg.config_dir / "client.toml"
     orig = run / "client.toml.t11.orig"

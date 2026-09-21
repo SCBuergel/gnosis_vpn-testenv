@@ -12,6 +12,7 @@ from suitelib.config import q
 TEST = "T10-forced-reconnect"
 KIND = "gate"
 KNOBS = dict(DUR=q(300, 150), T_KILL=60, RECOVER_MAX=90, REPEATS=q(3, 1))
+TIMEOUT = lambda k: 2 * k.REPEATS * (k.DUR + 400)   # seconds; the harness fails the test past this
 
 
 def recovery_s(csv_path, t_kill):
@@ -30,6 +31,8 @@ def recovery_s(csv_path, t_kill):
 
 def test_forced_reconnect(cfg, run, client, target, checks, knobs):
     k = knobs
+    if not shell.ok(["docker", "container", "inspect", cfg.server], timeout=30):
+        checks.skip(f"needs the exit server container {cfg.server} to remove the WireGuard peer on")
     for arm in ("T", "S"):
         for rep in range(1, k.REPEATS + 1):
             s = connect_or_fail(checks, client, cfg.dest, 15)

@@ -10,6 +10,8 @@ The sample guard is the point: a probe on a broken session sends a handful of pa
 confident loss percentage (255 of 4688 sent, "60.78 % loss"); below SAMPLE_MIN_PCT of the expected count the arm
 is UNMEASURED. Each arm gets its own session because arms sharing one were order-dependent (82.7 % then 0.41 %).
 There is deliberately no XFAIL here: an earlier bound came from a number contaminated by the SURB ramp."""
+import time
+
 from suitelib.client import connect_or_fail
 from suitelib.config import q
 from suitelib.stats import num
@@ -18,7 +20,8 @@ from suitelib.target import transfer_series
 TEST = "T06-realtime-udp"
 KIND = "gate"
 KNOBS = dict(ECHO_RATE=1.5, ECHO_DUR=q(300, 120), STREAM_RATE=3.0, STREAM_DUR=q(120, 90), LOSS_MAX=5, STALL_MAX=5,
-             SIZE=1200, SAMPLE_MIN_PCT=80, PER_ARM_SESSION=1, AFTER_BULK=1)
+             SIZE=1200, SAMPLE_MIN_PCT=80, PER_ARM_SESSION=1, AFTER_BULK=1, IDLE_ARM=1)
+TIMEOUT = lambda k: 5 * (k.ECHO_DUR + 3 * k.STREAM_DUR) + 1800   # seconds; the harness fails the test past this
 
 
 def expected_pkts(rate_mbit, dur, size):
@@ -64,12 +67,14 @@ def check_arm(checks, k, label, rate, dur, j, e):
 
 def test_realtime_udp(cfg, run, client, cluster, target, checks, knobs):
     k = knobs
-    shared = {"s": None}
+    shared, last_since = {"s": None}, {"v": None}
 
     def arm_connect():
         if k.PER_ARM_SESSION == 0 and shared["s"] is not None:
             return shared["s"]
         shared["s"] = connect_or_fail(checks, client, cfg.dest, 0)
+        if shared["s"]:
+            last_since["v"] = shared["s"].since
         return shared["s"]
 
     def arm_disconnect():
@@ -81,6 +86,28 @@ def test_realtime_udp(cfg, run, client, cluster, target, checks, knobs):
         return run.read_json(name, {"loss_pct": 100, "sent": 0})
 
     with cluster.sampler(run, "t06", 1, [client.name, cfg.server]):
+        # arm 0 - the control, black box: connect and do NOTHING for ECHO_DUR s. A session that reconnects with no
+        # traffic at all is not a load defect, whatever the loaded arms then show; the liveness-ping artifact
+        # (every session reconnecting every ~85 s, idle or loaded) was misread as one for two days because no arm
+        # measured the idle session. Zero reconnects and zero tunnel-ping timeouts, nothing else is asked.
+        if k.IDLE_ARM == 1:
+            s = arm_connect()
+            if s:
+                time.sleep(k.ECHO_DUR)
+                e = s.errors()
+                checks.row(label="idle", rate_mbit=0, duration_s=k.ECHO_DUR, errors=e)
+                if e["reconnects"] > 0:
+                    checks.failed(f"idle: RECONNECT with no traffic - reconnects {e['reconnects']}, tunnel-ping timeouts "
+                                  f"{e['ping_timeouts']} in {k.ECHO_DUR}s idle; the liveness ping or the session itself is "
+                                  f"failing, so no loaded arm below measures load")
+                elif e["ping_timeouts"] > 0:
+                    checks.warn(f"idle: {e['ping_timeouts']} tunnel-ping timeout(s) in {k.ECHO_DUR}s with no traffic and no reconnect")
+                else:
+                    checks.passed(f"idle: {k.ECHO_DUR}s idle session, no reconnect, no tunnel-ping timeout")
+                s.save_log("t06-idle")
+                arm_disconnect()
+            else:
+                checks.failed("idle: connect failed")
         # arm 1 - the gate: one long bidirectional call at the realistic rate
         r = k.ECHO_RATE
         s = arm_connect()
@@ -118,7 +145,7 @@ def test_realtime_udp(cfg, run, client, cluster, target, checks, knobs):
                 arm_disconnect()
             else:
                 checks.failed(f"dl-after-bulk-{r}Mbit: connect failed")
-    errs = shared["s"].errors() if shared["s"] else {}
+    errs = client.log_errors(last_since["v"]) if last_since["v"] else {}
     if shared["s"]:
         shared["s"].save_log("t06")
         client.disconnect()

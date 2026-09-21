@@ -1,5 +1,8 @@
 # Ubuntu 24.04-based exit-server image for a glibc build of gnosis_vpn-server (cargo build --release).
-# Mirrors gnosis_vpn-server/docker/Dockerfile (Alpine + static Nix build) otherwise.
+# The release configuration is the upstream image (gnosis_vpn-server/docker/Dockerfile: Alpine + the static Nix
+# build), which `just build-server` builds and the suite's default stack uses. This image is only for bisecting or
+# A/B-ing server commits with a cargo build; it is not a release configuration and runs on it are not release
+# evidence. Mirrors the upstream image otherwise.
 FROM ubuntu:24.04
 RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       wireguard-tools iptables iproute2 procps ca-certificates >/dev/null \

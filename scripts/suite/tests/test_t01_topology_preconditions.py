@@ -14,18 +14,22 @@ KNOBS = dict(FWD_TIMEOUT=20, READY_TIMEOUT=300, CLIENT_CHANNEL_TIMEOUT=240, PERI
 
 def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
     k = knobs
+    has_cluster = cluster.available()
+    if not has_cluster:
+        checks.record("no localcluster (production-network run): cluster, forwarding and server checks skipped")
     # cluster
-    state = cluster.state()
-    checks.verdict(state == "running", f"cluster state '{state}'")
-    for i in range(cfg.cluster_size):
-        ns = cluster.field(i, "state")
-        checks.verdict(ns == "channels_open", f"node {i} state '{ns}'")
-    # channels open in both directions between every pair (localcluster full mesh)
-    for i in range(cfg.cluster_size):
-        n = len(cluster.open_outgoing(i))
-        checks.verdict(n >= cfg.cluster_size - 1, f"node {i} has {n} open outgoing channels")
+    if has_cluster:
+        state = cluster.state()
+        checks.verdict(state == "running", f"cluster state '{state}'")
+        for i in range(cfg.cluster_size):
+            ns = cluster.field(i, "state")
+            checks.verdict(ns == "channels_open", f"node {i} state '{ns}'")
+        # channels open in both directions between every pair (localcluster full mesh)
+        for i in range(cfg.cluster_size):
+            n = len(cluster.open_outgoing(i))
+            checks.verdict(n >= cfg.cluster_size - 1, f"node {i} has {n} open outgoing channels")
     # forwarding probe: from node 0, a session with Hops=1 to node j is forced through the remaining node(s)
-    if cfg.cluster_size >= 3:
+    if has_cluster and cfg.cluster_size >= 3:
         for j in range(1, cfg.cluster_size):
             t0 = time.time()
             r = cluster.api_json(0, "POST", "/api/v4/session/udp",
@@ -85,7 +89,7 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
     srv = shell.out(["docker", "exec", cfg.server, "ip", "-4", "-o", "addr", "show", "dev", "wggvpn"], timeout=30)
     srv_addrs = [l.split()[3].split("/")[0] for l in srv.splitlines() if len(l.split()) > 3]
     for want in (k.PERIODIC_PING_TARGET, cfg_ping):
-        if not want:
+        if not want or not has_cluster:
             continue
         if want in srv_addrs:
             checks.passed(f"liveness-ping target {want} is an address on the server's wggvpn")

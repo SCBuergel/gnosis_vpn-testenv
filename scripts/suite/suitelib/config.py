@@ -85,6 +85,12 @@ class Config:
         self.server = e.get("SERVER", "gnosis_vpn-server-0")
         self.netem_iface = e.get("NETEM_IFACE", "lo")
         self.save_log_raw = e.get("SAVE_LOG_RAW", "0") == "1"
+        # production-network mode: an external target (TARGET_HOST, --target) replaces the in-cluster container and
+        # NO_CLUSTER=1 (--no-cluster) tells the cluster-dependent checks there is no localcluster to ask
+        self.target_host = e.get("TARGET_HOST", "")
+        self.no_cluster = e.get("NO_CLUSTER", "0") == "1"
+        # every test is killed after this many seconds unless its module computes its own TIMEOUT(knobs)
+        self.test_timeout = int(e.get("TEST_TIMEOUT", "7200"))
         self.client_image = e.get("CLIENT_IMAGE", "")
         self.cluster_env = e.get("CLUSTER_ENV", "")
         self.cluster_latency = e.get("CLUSTER_LATENCY", "")

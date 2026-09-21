@@ -11,7 +11,8 @@ KIND = "diagnostic"
 KNOBS = dict(N=10, STDEV_MAX=25, SUITE_LATENCY_MAP="", LATENCY_TOL_MS=15)
 
 
-def test_latency_matrix(cfg, cluster, checks, knobs):
+def test_latency_matrix(cfg, live_cluster, checks, knobs):
+    cluster = live_cluster
     k = knobs
     med = {}
     for i in range(cfg.cluster_size):

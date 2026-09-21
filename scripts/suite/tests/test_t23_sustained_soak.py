@@ -14,6 +14,7 @@ from suitelib.target import curl_down, curl_up
 TEST = "T23-sustained-soak"
 KIND = "gate"
 KNOBS = dict(DUR=q(3600, 600), INTERVAL=300, LOG_MB_MIN_MAX=200, CALL_LOSS_MAX=5)
+TIMEOUT = lambda k: k.DUR + k.INTERVAL + 1800   # seconds; the harness fails the test past this
 
 
 def test_sustained_soak(cfg, run, client, cluster, target, checks, knobs):

@@ -100,7 +100,9 @@ just up-nobuild                                   # pre-built binaries/images: c
 just test t04                                     # one catalogue test against the live stack
 just suite --fast                                 # the one run, shorter durations (--very-fast, --only, --skip, --knob)
 just matrix scripts/suite/cells/example.cells     # one stack per version/config cell
-just suite-selftest                               # offline unit tests of the suite library
+just suite-selftest                               # offline: library unit tests + every probe against every target service on loopback
+just suite --client gnosis_vpn-client --dest node-0 --target 203.0.113.7 --no-cluster   # production network: any client, any host running docker/target
+just nightly                                      # the daily battery: build the latest of every component, up, suite --fast, down
 ```
 
 What the suite added to the stack (each is a justfile variable with the old behaviour as default):
@@ -117,7 +119,7 @@ What the suite added to the stack (each is a justfile variable with the old beha
 | `HOPS0_ALSO` | also generate 0-hop `node-N-h0` destinations (T30-hopcount-ab) |
 | `TARGET_IMAGE`, `TARGET_NAME` | the in-cluster traffic target (`just target-start`): sized HTTP download/upload, UDP echo, one-way stream server, two-way call server |
 
-New recipes: `build-client-glibc DIR TAG` and `build-server-glibc BIN TAG` (Ubuntu-based images from cargo builds or an unpacked `.deb`, no Nix), `build-target`, `target-start`/`target-stop`, `client2-start`/`client2-stop`, `up-nobuild`, `cluster-restart`, `test`, `suite`, `suite-selftest`, `matrix`. `gen-config` now saves every extra identity as `extra_id_<i>.*` (keeping `extra_id.*` for the client).
+New recipes: `nightly`, `build-client-glibc DIR TAG` and `build-server-glibc BIN TAG` (Ubuntu-based images from cargo builds or an unpacked `.deb`, no Nix), `build-target`, `target-start`/`target-stop`, `client2-start`/`client2-stop`, `up-nobuild`, `cluster-restart`, `test`, `suite`, `suite-selftest`, `matrix`. `gen-config` now saves every extra identity as `extra_id_<i>.*` (keeping `extra_id.*` for the client).
 
 ## Connectivity smoke-test / drain-tour / traffic scripts
 

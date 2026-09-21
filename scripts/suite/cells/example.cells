@@ -1,6 +1,12 @@
+# Cells for `just matrix scripts/suite/cells/<file>`: one stack per line, the suite runs once per cell (T26-version-matrix).
 # name|CLIENT_IMAGE|HOPRD_BIN|CLUSTER_ENV|CLIENT_EXTRA_ENV|LOCALCLUSTER_BIN
-# The 2026-09-16 matrix: two client builds × two hoprd versions. Paths are the build host's.
-A-0961-hoprd412|gnosis_vpn-client:0.96.1|/root/hoprd-bins/hoprd-4.1.2-release|HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64||/root/testenv/hoprd-41/target/release/hoprd-localcluster
-B-0961-hoprd403|gnosis_vpn-client:0.96.1|/root/hoprd-bins/elf-4.0.3|||/root/testenv/hoprd-403/target/release/hoprd-localcluster
-C-ramp-hoprd412|gnosis_vpn-client:fix-surb-ramp|/root/hoprd-bins/hoprd-4.1.2-release|HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64||/root/testenv/hoprd-41/target/release/hoprd-localcluster
-D-ramp-hoprd403|gnosis_vpn-client:fix-surb-ramp|/root/hoprd-bins/elf-4.0.3|||/root/testenv/hoprd-403/target/release/hoprd-localcluster
+#   name              label of the cell (run id suffix, `cell` field in rows/verdicts)
+#   CLIENT_IMAGE      client image tag (just build-client, or build-client-glibc DIR TAG for a cargo build)
+#   HOPRD_BIN         hoprd binary every cluster node runs; LOCALCLUSTER_BIN from the same tree (empty = the environment's)
+#   CLUSTER_ENV       "K=V K=V" for every node, e.g. HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64 (T25-knob-ab)
+#   CLIENT_EXTRA_ENV  "K=V K=V" for the client, e.g. GNOSISVPN_SURB_RAMP_SECS=0
+# Empty fields are allowed. Two client builds x two hoprd versions, as an A/B/C/D template:
+A-client-latest-hoprd-latest|gnosis_vpn-client:latest|/path/to/hoprd-latest/target/release/hoprd|||/path/to/hoprd-latest/target/release/hoprd-localcluster
+B-client-latest-hoprd-prev|gnosis_vpn-client:latest|/path/to/hoprd-prev/target/release/hoprd|||/path/to/hoprd-prev/target/release/hoprd-localcluster
+C-client-prev-hoprd-latest|gnosis_vpn-client:prev|/path/to/hoprd-latest/target/release/hoprd|||/path/to/hoprd-latest/target/release/hoprd-localcluster
+D-client-prev-hoprd-prev|gnosis_vpn-client:prev|/path/to/hoprd-prev/target/release/hoprd|||/path/to/hoprd-prev/target/release/hoprd-localcluster

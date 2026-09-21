@@ -8,6 +8,7 @@ Results go to SUITE_OUT_DIR/<run-id>/ (rows.jsonl, verdicts.jsonl, summary.csv, 
 samples/); a run id that already holds results is refused. T01 failing aborts the run."""
 import os
 import re
+import signal
 import sys
 import time
 from pathlib import Path
@@ -58,6 +59,7 @@ class SuiteState:
         self.tee_out = _Tee(sys.stdout)
         self.tee_err = _Tee(sys.stderr)
         self.started = None
+        self.run_id = None
 
 
 def pytest_addoption(parser):
@@ -72,6 +74,18 @@ def pytest_addoption(parser):
     g.addoption("--skip", default="", metavar="tNN,tNN", help="drop these tests")
     g.addoption("--runbook", action="store_true", help="also collect the runbook items t25 ... t32")
     g.addoption("--no-preconditions", action="store_true", help="do not force t01 in front of an --only selection")
+    g.addoption("--client", default=None, metavar="CONTAINER", help="the client container under test (CLIENT)")
+    g.addoption("--dest", default=None, metavar="ID", help="the destination id in client.toml to connect to (DEST)")
+    g.addoption("--target", default=None, metavar="HOST", help="an external traffic target running docker/target's services "
+                "(TARGET_HOST): production-network runs, no in-cluster container")
+    g.addoption("--no-cluster", action="store_true", help="no localcluster: cluster-dependent checks skip, node sampling is off")
+    g.addoption("--timeout", type=int, default=None, metavar="S", help="per-test timeout in seconds (TEST_TIMEOUT); a module's "
+                "TIMEOUT(knobs) overrides it")
+
+
+def _is_live_arg(a):
+    p = Path(a.split("::")[0])
+    return "selftest" not in p.parts and (p.name == "tests" or TEST_FILE.search(p.name) is not None)
 
 
 def _test_id(item):
@@ -87,13 +101,21 @@ def pytest_configure(config):
         k, _, v = kv.partition("=")
         knobs[k] = v
     env = dict(os.environ)
-    if config.getoption("--cell"):
-        env["SUITE_CELL"] = config.getoption("--cell")
+    for opt, var in (("--cell", "SUITE_CELL"), ("--client", "CLIENT"), ("--dest", "DEST"), ("--target", "TARGET_HOST"), ("--timeout", "TEST_TIMEOUT")):
+        if config.getoption(opt) is not None and config.getoption(opt) != "":
+            env[var] = str(config.getoption(opt))
+    if config.getoption("--no-cluster"):
+        env["NO_CLUSTER"] = "1"
     cfg = Config(env, fast=config.getoption("--fast"), very_fast=config.getoption("--very-fast"), knobs=knobs)
     state = SuiteState(cfg)
     config._suite = state
     if getattr(config.option, "help", False) or getattr(config.option, "version", False) or config.option.collectonly:
         return
+    # a junit.xml next to the other results, for CI and dashboards; the run directory is settled at collection
+    if not config.option.xmlpath and any(_is_live_arg(a) for a in config.args):
+        state.run_id = config.getoption("--run-id") or os.environ.get("SUITE_RUN_ID") \
+            or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + (f"-{cfg.cell}" if cfg.cell else "")
+        config.option.xmlpath = str(cfg.out_dir / state.run_id / "junit.xml")
     # the terminal reporter grabs sys.stdout right after this hook; the console log file is attached once the
     # run directory exists (pytest_collection_finish), so everything from the first test line on lands in it
     sys.stdout, sys.stderr = state.tee_out, state.tee_err
@@ -137,7 +159,7 @@ def pytest_collection_finish(session):
     if not live or session.config.option.collectonly:
         return
     cfg = state.cfg
-    run_id = session.config.getoption("--run-id") or os.environ.get("SUITE_RUN_ID") \
+    run_id = state.run_id or session.config.getoption("--run-id") or os.environ.get("SUITE_RUN_ID") \
         or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + (f"-{cfg.cell}" if cfg.cell else "")
     path = cfg.out_dir / run_id
     # A run id is a directory and every test appends to it. Reusing one blends two runs into one verdicts file
@@ -172,12 +194,38 @@ def pytest_runtest_setup(item):
         print(f"\n=== {getattr(item.module, 'TEST', tid)} {time.strftime('%T', time.gmtime())} ===", flush=True)
 
 
+class TestTimeout(Exception):
+    pass
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem):
-    """Run the test, then turn its recorded gate failures into a pytest failure."""
+    """Run the test under a timeout, then turn its recorded gate failures into a pytest failure.
+    Every test has a timeout: the module's TIMEOUT(knobs) when it defines one (a soak knows its own duration),
+    otherwise --timeout / TEST_TIMEOUT. On expiry the test fails and the fixtures still disconnect the client."""
     funcargs = pyfuncitem.funcargs
     args = {a: funcargs[a] for a in pyfuncitem._fixtureinfo.argnames}
-    pyfuncitem.obj(**args)
+    state = pyfuncitem.config._suite
+    limit = state.cfg.test_timeout
+    fn = getattr(pyfuncitem.module, "TIMEOUT", None)
+    if callable(fn) and "knobs" in funcargs:
+        limit = int(fn(funcargs["knobs"]))
+
+    def on_alarm(signum, frame):
+        raise TestTimeout(f"test exceeded its timeout of {limit}s")
+
+    old = signal.signal(signal.SIGALRM, on_alarm)
+    signal.alarm(limit)
+    try:
+        pyfuncitem.obj(**args)
+    except TestTimeout as e:
+        checks = funcargs.get("checks")
+        if checks is not None:
+            checks.failed(str(e))
+        pytest.fail(str(e), pytrace=False)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
     checks = funcargs.get("checks")
     if checks is not None:
         checks.conclude()
@@ -205,6 +253,8 @@ def pytest_sessionfinish(session, exitstatus):
     if state is None or state.run is None:
         return
     clientlib._disarm_all()
+    if session.config.option.xmlpath:
+        print(f"junit: {session.config.option.xmlpath}")
     gate_fail = write_summary(state.run)
     with open(state.run / "run.txt", "a") as r:
         r.write(f"finished={time.strftime('%FT%TZ', time.gmtime())} fail={int(bool(gate_fail))}\n")
@@ -248,7 +298,17 @@ def client2(cfg, run):
 
 @pytest.fixture(scope="session")
 def cluster(cfg):
+    """The localcluster. On a production-network run (--no-cluster) it reports available() False: tests whose
+    subject is the cluster skip, and the node sampler samples nothing."""
     return Cluster(cfg)
+
+
+@pytest.fixture
+def live_cluster(cluster, checks):
+    """A cluster that must be there; skips the test otherwise."""
+    if not cluster.available():
+        checks.skip("needs the localcluster (this is a --no-cluster / production-network run)")
+    return cluster
 
 
 @pytest.fixture(scope="session")

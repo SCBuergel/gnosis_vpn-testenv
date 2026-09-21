@@ -9,6 +9,7 @@ from suitelib.stats import num
 TEST = "T24-sustained-upload"
 KIND = "gate"
 KNOBS = dict(RATE=3, DUR=q(900, 240), MTUS="default 940")
+TIMEOUT = lambda k: len(k.words("MTUS")) * (k.DUR + 600)   # seconds; the harness fails the test past this
 UNDECODABLE = 'hopr_packet_rejected_count{reason="undecodable"}'
 
 

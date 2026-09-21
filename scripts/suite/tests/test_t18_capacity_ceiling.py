@@ -11,6 +11,7 @@ from suitelib.stats import num
 TEST = "T18-capacity-ceiling"
 KIND = "diagnostic"
 KNOBS = dict(LADDER=q("1 2 4 8 12 16", "2 4 8 12"), STEP_S=q(60, 30))
+TIMEOUT = lambda k: len(k.words("LADDER")) * (k.STEP_S + 120) + 600   # seconds; the harness fails the test past this
 
 
 def test_capacity_ceiling(cfg, run, client, cluster, target, checks, knobs):

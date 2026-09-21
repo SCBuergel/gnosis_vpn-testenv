@@ -13,8 +13,13 @@ class Target:
     def __init__(self, cfg):
         self.cfg = cfg
         self.name = cfg.target_name
-        self.ip = self._ip(cfg.target_network)
-        self.ip_direct = self._ip(cfg.docker_network)
+        if cfg.target_host:                      # an external target (production network): one address for both views
+            self.ip = self.ip_direct = cfg.target_host
+            self.external = True
+        else:
+            self.ip = self._ip(cfg.target_network)
+            self.ip_direct = self._ip(cfg.docker_network)
+            self.external = False
 
     def _ip(self, network):
         raw = shell.out(["docker", "inspect", self.name], timeout=30)

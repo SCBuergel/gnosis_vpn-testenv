@@ -7,6 +7,7 @@ from suitelib.config import q
 TEST = "T21-passive-observer"
 KIND = "diagnostic"
 KNOBS = dict(DUR=q(300, 60))
+TIMEOUT = lambda k: k.DUR + 300   # seconds; the harness fails the test past this
 
 
 def test_passive_observer(cfg, run, client, client2, checks, knobs):

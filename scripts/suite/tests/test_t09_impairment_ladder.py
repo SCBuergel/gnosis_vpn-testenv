@@ -14,9 +14,11 @@ from suitelib.target import summary_row, transfer_series
 TEST = "T09-impairment-ladder"
 KIND = "gate"
 KNOBS = dict(RUNGS=q("0 25 50", "0 25"), FAR=100, STREAM_S=q(120, 90))
+TIMEOUT = lambda k: (2 * len(k.words("RUNGS")) + 1) * (k.STREAM_S + 900)   # seconds; the harness fails the test past this
 
 
-def test_impairment_ladder(cfg, run, client, cluster, target, checks, knobs):
+def test_impairment_ladder(cfg, run, client, live_cluster, target, checks, knobs):
+    cluster = live_cluster
     k = knobs
     if cfg.cluster_size < 3:
         checks.skip("needs CLUSTER_SIZE>=3 (exit + two relays)")

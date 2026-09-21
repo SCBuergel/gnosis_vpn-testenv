@@ -12,9 +12,11 @@ from suitelib.config import q
 TEST = "T20-fault-injection"
 KIND = "diagnostic"
 KNOBS = dict(LOSSES="1 5 20", STEP_S=q(60, 30), RELAY=1)
+TIMEOUT = lambda k: (len(k.words("LOSSES")) + 5) * k.STEP_S + 900   # seconds; the harness fails the test past this
 
 
-def test_fault_injection(cfg, run, client, cluster, target, checks, knobs):
+def test_fault_injection(cfg, run, client, live_cluster, target, checks, knobs):
+    cluster = live_cluster
     k = knobs
     if os.geteuid() != 0:
         checks.skip("needs root for tc")
