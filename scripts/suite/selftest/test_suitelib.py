@@ -131,7 +131,8 @@ def test_curl_result_parses_and_flags_completion():
     r = _curl_result("200 10000000 8.0 0.5", 10000000)
     assert r["complete"] and r["mbit"] == 10.0
     assert not _curl_result("000 0 0 0", 1)["complete"]
-    assert not _curl_result("500 100 1 0.1", 100, upload=True)["complete"]
+    assert not _curl_result("500 100 1 0.1", 100)["complete"]           # a full-size non-200 body is not a delivery
+    assert not _curl_result("429 100 1 0.1", 100)["complete"]
 
 
 def test_persec_stall_longest_zero_run(rundir, tmp_path):

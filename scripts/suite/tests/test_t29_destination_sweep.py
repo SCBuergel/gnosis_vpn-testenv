@@ -1,5 +1,10 @@
-"""T29-destination-sweep (runbook): for every destination the client reports: connect, in-tunnel ping, one
-download, disconnect; CYCLES rounds. Pass: every destination connects in every cycle."""
+"""T29-destination-sweep (runbook, production): which exits accept a tunnel right now, and at what speed? For every
+destination the client reports: connect after a 5 s idle (floored to SURB_RAMP_WAIT), in-tunnel ping, one download
+of BYTES, disconnect; CYCLES rounds; one row per destination and cycle. PASS per destination and cycle iff the
+connect succeeds; RTT and rate are recorded.
+
+Why: a 40-run cycle over 8 exits found one that connected but carried ~0 and one that stayed down for hours after
+a ladder; a page-load campaign found the same two."""
 from suitelib.client import ConnectFailed
 from suitelib.config import q
 from suitelib.target import curl_down, ping_avg

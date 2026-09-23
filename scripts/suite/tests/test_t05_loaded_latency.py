@@ -1,12 +1,20 @@
-"""T05-loaded-latency (gate): in-tunnel ping idle, during a saturating download, during a saturating upload; then
-N in PARALLEL parallel downloads. Assertions: (a) loaded RTT p95 in each direction under DOWN_P95_MAX_MS /
-UP_P95_MAX_MS (calibrated: three full runs measured download p95 359, 537, 1076 ms and upload p95 1124, 1153,
-1746 ms; the fleet's bufferbloat finding was 2-4 s); (b) every parallel flow completes within CAP, and the
-aggregate must not fall as N rises. The aggregate is computed from the bytes curl actually received, not from
-N x BYTES (that read exactly the cap, 5.33 Mbit/s at N=6, in three runs); a flow that hits CAP is incomplete
-and fails on its own, and the aggregate rule applies only to rungs where every flow completed.
-Runs fifth, right after the throughput reference: loaded-RTT numbers taken after an hour of other tests
-measure accumulated host load, not the stack."""
+"""T05-loaded-latency (gate): in-tunnel RTT idle, then during a saturating download, then during a saturating
+upload, PHASE_S each (p50 and p95 per phase); then N in PARALLEL concurrent downloads of BYTES on the same session,
+aggregate Mbit/s per N from the bytes curl actually received over the rung's wall time. Uploads are not run in
+parallel: the scaling question is about the SURB-metered return path that downloads ride; T24 covers the forward
+path alone. Runs fifth, right after the throughput reference, because loaded RTT taken after an hour of other
+tests measures accumulated host load.
+
+Pass iff loaded p95 <= DOWN_P95_MAX_MS in the download phase and <= UP_P95_MAX_MS in the upload phase; every
+parallel flow completes within CAP (a rung with an incomplete flow fails naming the count and bytes); and no rung's
+aggregate falls below 0.8 x the previous rung's. Until 2026-09-20 the aggregate was N x BYTES over wall time, so
+a capped flow still counted as delivered and three runs read exactly the cap (5.33 Mbit/s at N=6).
+Calibration: three full runs measured download p95 359, 537, 1076 ms and upload p95 1124, 1153, 1746 ms; the
+fleet's bufferbloat finding was 2-4 s.
+
+Why: on the fleet N = 1/3/6 downloads gave 5.7, 5.6, 3.3 Mbit/s while loaded RTT went 216, 511, 722 ms and a
+parallel upload hit 8.9 s: the HOPR session path is the cap and its queues bloat. No other test measures latency
+under load."""
 import time
 
 from suitelib.client import connect_or_fail

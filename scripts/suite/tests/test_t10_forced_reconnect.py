@@ -1,7 +1,20 @@
-"""T10-forced-reconnect (gate): during a call (callprobe) the WireGuard peer is removed on the exit server at
-+T_KILL s; arm T = far end keeps streaming, arm S = far end pauses while we are silent. Records time to recovery
-(first downstream packet after the kill), DecapStalled, rebinds.
-Pass: recovery within RECOVER_MAX s in both arms, zero DecapStalled."""
+"""T10-forced-reconnect (gate): when the tunnel is torn down mid-call and rebuilt, does the fresh session survive
+traffic already arriving, and how long is the user dark? A callprobe call of DUR s; at +T_KILL s the client's
+WireGuard peer is removed on the exit server, found in 'wg show wggvpn dump' by allowed-ips = the client's tunnel
+address (the client's WireGuard is userspace, so nothing shows inside its container), never every peer. Arm T: the
+far end keeps streaming through the kill; arm S: it pauses while the client is silent and resumes on its next
+packet. REPEATS per arm. Records time to the first downstream packet after the kill, DecapStalled, rebinds.
+DUR - T_KILL must exceed RECOVER_MAX: the client notices a removed peer only through three liveness-ping cycles,
+about 75 s, so a 70 s window reads as never recovered.
+
+Pass iff, per arm and repeat, the first downstream packet after the removal arrives within RECOVER_MAX s and
+DecapStalled = 0; a repeat whose peer key cannot be read or whose removal fails FAILs. Reconnects and rebinds are
+recorded. Calibration: 72-83 s on the reference stack.
+
+Why: this is the user's 'intermittent loss of connection'. On 2026-09-14 every one of ten reconnects died 3-7 s
+after 'session is ready' (DecapStalled), then cost a 2-minute ping timeout and a worker restart, about 70 % of the
+hour lost; the quiet-restart arm had no failures. T07 covers only the first connect and T23 reaches a reconnect
+only by accident."""
 import random
 import time
 

@@ -1,7 +1,19 @@
-"""T24-sustained-upload (gate, organic-SURB overflow guard): upload-only stream at RATE Mbit/s for DUR s with
-full-size datagrams, sampling the client's undecodable counter; then the same with MTU 940. Pass: stream
-completes without reconnect, undecodable flat (< 50), loss < 5 %. The session must outlive the deadman
-(deadman_cover); a missing end-of-stream report is an UNMEASURED FAIL that says so."""
+"""T24-sustained-upload (gate, the organic-SURB overflow guard): does a long steady upload survive, and can the
+client keep opening the replies? An upload-only stream (streamprobe) at RATE Mbit/s for DUR s with 1200 B
+datagrams, per MTU in MTUS (default, then 940 so a datagram fits one HOPR packet), reading the client's
+hopr_packet_rejected_count{reason="undecodable"} before and after. The session outlives the deadman through
+client.deadman_cover(DUR); under the default the client was disconnected ~30 s before the sender finished and both
+arms printed a blank loss.
+
+Pass iff, per MTU, stream loss < 5 %, reconnects = 0 and undecodable grew by fewer than 50. A missing end-of-stream
+report from the server is an UNMEASURED FAIL naming the second the tunnel interface went down, if the probe saw
+it. Not implemented: the 6 Mbit/s rate, 1 Hz sampling of the exit's SURB estimate, counting cause=Size opener
+evictions and clamped_to warnings.
+
+Why: uploads died at +405 s (3 Mbit/s) and +250 s (6 Mbit/s), every time. Each full-size packet mints an organic
+SURB, the client's reply-opener store caps at 100 000 per pseudonym and evicts oldest, the exit spends SURBs
+oldest-first, so after ~100k packets no reply the exit sends can be opened. 900 B datagrams ran two 800 MB uploads
+clean, which is the verification; the fix lineage is hoprnet#8392. The test stays as the regression guard."""
 from suitelib.client import connect_or_fail
 from suitelib.config import q
 from suitelib.stats import num

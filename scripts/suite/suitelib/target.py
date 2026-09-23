@@ -38,14 +38,16 @@ class Target:
         return f"http://{host or self.ip}:{self.http_port}/up"
 
 
-def _curl_result(w, want, upload=False):
+def _curl_result(w, want):
+    """Parse curl's '%{http_code} %{size} %{time_total} %{time_starttransfer}'. A transfer is complete only with the
+    full byte count AND a 200: a non-200 body (a proxy or captive-portal page, a 429) is never a delivered payload."""
     p = (w.split() + ["0", "0", "0", "0"])[:4]
     code = p[0]
     b = int(float(p[1] or 0))
     t = float(p[2] or 0)
     ttfb = float(p[3] or 0)
     mbit = round(b * 8 / t / 1e6, 3) if t > 0 else 0
-    complete = b >= want and (code == "200" if upload else True)
+    complete = b >= want and code == "200"
     return {"code": code, "bytes": b, "elapsed": round(t, 2), "ttfb": round(ttfb, 2), "mbit": mbit, "complete": complete}
 
 
@@ -61,34 +63,52 @@ def curl_up(client, host, nbytes, cap):
     w = client.out(f"curl -s -o /dev/null -m {cap} -w '%{{http_code}} %{{size_upload}} %{{time_total}} %{{time_starttransfer}}' "
                    f"-H 'Content-Type: application/octet-stream' --data-binary @/tmp/up.bin "
                    f"'http://{host}:{Target.http_port}/up' 2>/dev/null || true", timeout=cap + 30)
-    return _curl_result(w, nbytes, upload=True)
+    return _curl_result(w, nbytes)
 
 
-def transfer_series(checks, client, label, host, reps, nbytes, cap):
-    """reps x (download, upload) with per-second stall detection; one row per transfer.
-    Returns {down_median, up_median, down_complete, up_complete, reps, down: [...], up: [...]}."""
-    down, up = [], []
-    for r in range(1, reps + 1):
-        client.persec_start(f"{label}-d{r}")
-        d = curl_down(client, host, nbytes, cap)
-        client.persec_stop()
-        checks.row(label=label, dir="down", rep=r, res=d, stall_s=client.persec_stall(f"{label}-d{r}", "rx"))
-        down.append(d)
-        client.persec_start(f"{label}-u{r}")
-        u = curl_up(client, host, nbytes, cap)
-        client.persec_stop()
-        checks.row(label=label, dir="up", rep=r, res=u, stall_s=client.persec_stall(f"{label}-u{r}", "tx"))
-        up.append(u)
+def _series_summary(down, up):
     return {"down_median": round(st.median([d["mbit"] for d in down]), 3) if down else 0,
             "up_median": round(st.median([u["mbit"] for u in up]), 3) if up else 0,
             "down_complete": sum(1 for d in down if d["complete"]),
             "up_complete": sum(1 for u in up if u["complete"]),
-            "reps": len(down), "down": down, "up": up}
+            "n": len(down)}
+
+
+def transfer_series(checks, client, label, host, reps, nbytes, cap, sizes=None):
+    """reps x [for each size: download, then upload] with per-second stall detection; one row per transfer.
+    `sizes` (bytes) cycles several payload sizes inside every rep; without it the one size is `nbytes`.
+    Returns the summary over every transfer plus `by_size` ({bytes: summary}) and the raw lists."""
+    sizes = list(sizes or [nbytes])
+    down, up = [], []
+    i = 0
+    for r in range(1, reps + 1):
+        for n in sizes:
+            i += 1
+            tag = f"{label}-d{i}"
+            client.persec_start(tag)
+            d = dict(curl_down(client, host, n, cap), want=n)
+            client.persec_stop()
+            checks.row(label=label, dir="down", rep=r, bytes=n, res=d, stall_s=client.persec_stall(tag, "rx"))
+            down.append(d)
+            tag = f"{label}-u{i}"
+            client.persec_start(tag)
+            u = dict(curl_up(client, host, n, cap), want=n)
+            client.persec_stop()
+            checks.row(label=label, dir="up", rep=r, bytes=n, res=u, stall_s=client.persec_stall(tag, "tx"))
+            up.append(u)
+    s = _series_summary(down, up)
+    s["reps"] = reps
+    s["by_size"] = {n: _series_summary([d for d in down if d["want"] == n], [u for u in up if u["want"] == n]) for n in sizes}
+    s["down"], s["up"] = down, up
+    return s
 
 
 def summary_row(s):
     """The compact form of a transfer_series result for rows.jsonl."""
-    return {k: s[k] for k in ("down_median", "up_median", "down_complete", "up_complete", "reps")}
+    row = {k: s[k] for k in ("down_median", "up_median", "down_complete", "up_complete", "n", "reps")}
+    if len(s.get("by_size", {})) > 1:
+        row["by_size"] = s["by_size"]
+    return row
 
 
 def ping_rtts(client, host, count, interval=1, wait=3):

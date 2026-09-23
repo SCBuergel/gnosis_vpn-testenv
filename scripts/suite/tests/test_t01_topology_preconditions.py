@@ -1,7 +1,22 @@
-"""T01-topology-preconditions: cluster running, every node channels_open with a full mesh of open channels, each
-relay forwards a 1-hop session opened from the exit within FWD_TIMEOUT s, the client worker online and every
-destination Ready, the client holding an outgoing channel, both liveness-ping targets on the server's wggvpn,
-no leftover qdisc or suite timer on the host. A FAIL aborts the run."""
+"""T01-topology-preconditions (gate): is the stack in the state every later test assumes? Reads the localcluster
+status and every node's channel set, opens a 1-hop UDP session from the exit through each relay, waits for the
+client worker, for DEST to be Ready and for the client's own outgoing channel, checks both liveness-ping targets
+against the server's wggvpn addresses, and looks for leftover netem qdiscs and suite timers on the host. The
+effective client config is recorded against the shipped defaults, not asserted. A FAIL aborts the run: a number
+measured through a broken precondition looks like a finding.
+
+Pass iff: cluster state is running; every node reports channels_open with at least CLUSTER_SIZE-1 outgoing channels
+Open; with CLUSTER_SIZE >= 3 a 1-hop session from node 0 to every other node establishes within FWD_TIMEOUT s (a
+later success fails naming the duration; the session is deleted either way); the client worker is online within
+120 s; DEST is Ready within READY_TIMEOUT s; the client holds an outgoing channel within CLIENT_CHANNEL_TIMEOUT s;
+both the configured [connection.ping] address and PERIODIC_PING_TARGET (the address a client <= 0.96.3 pings from
+tunnel_ping_loop whatever the config says) are on the server's wggvpn; no netem qdisc on the host. WARN only:
+another destination not Ready, an armed suite or deadman timer.
+
+Why: a relay that pings at 6 ms can forward nothing (a production relay silently rejected tickets for 2.5 hours and
+invalidated every run in the window), so the probe opens a session instead of pinging. A missing liveness-ping
+target makes every session reconnect every ~85 s; two full runs were read as a load defect before that was found.
+Not checked: channel balance, foreign peers on the exit, identity double-runs, announced addresses."""
 import re
 import time
 

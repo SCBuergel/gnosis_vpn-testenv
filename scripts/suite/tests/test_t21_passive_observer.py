@@ -1,5 +1,11 @@
-"""T21-passive-observer (diagnostic): the second client never connects; it polls destination health for DUR s
-alongside client 1. Pass: both clients report the same Ready count in at least 80 % of samples."""
+"""T21-passive-observer (diagnostic): when the client says the network is broken, is it the network or the client?
+The second client never connects; it polls destination health every 15 s for DUR s alongside client 1's view.
+SKIP unless CLIENT2 runs. PASS iff the two disagree on the count of Ready destinations in at most 1/5 of the
+samples.
+
+Why: the active node reported most exits as merely Routable with 'Connection reset by peer' while an independent
+passive node saw the same exits ReadyToConnect throughout; the fault was local, and 'the exits degrade' had
+already been written down."""
 import time
 
 from suitelib.config import q

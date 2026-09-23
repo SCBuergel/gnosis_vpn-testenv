@@ -1,15 +1,26 @@
-"""T06-realtime-udp (gate): behaviour under constant bitrate. Arms, each on its own session: one long
-bidirectional echo call (relprobe) at ECHO_RATE for ECHO_DUR s, which is long enough to show a reconnect cycle;
-upload-only and download-only streams (streamprobe) at STREAM_RATE for STREAM_DUR s, which discriminate the
-direction; and the download stream again on a session that has just carried bulk transfers (AFTER_BULK).
+"""T06-realtime-udp (gate): can the tunnel carry a fixed-rate flow, as opposed to a bulk TCP transfer that hides
+return-path loss behind retransmission? Five arms, each on its own session (PER_ARM_SESSION): an idle control that
+sends nothing for ECHO_DUR s (IDLE_ARM); a bidirectional echo call (relprobe against the target's :8901) at
+ECHO_RATE for ECHO_DUR s, long enough to show a reconnect cycle; an upload-only and a download-only paced stream
+(streamprobe against :8902) at STREAM_RATE for STREAM_DUR s, which tell the directions apart; and the download
+stream again on a session that has just carried REPS bulk transfers (AFTER_BULK). Each probe reports loss, delay
+above its minimum, stalls, rebinds and outage time; the probes re-bind when the tunnel interface is recreated and
+keep their port, so loss means loss on the live path, and the outage a reconnect caused is reported beside it,
+not inside it.
 
-Every arm is binary: no reconnect during the arm, loss below LOSS_MAX %, no stall over STALL_MAX s, and the
-probe must actually have sent what it set out to send. A reconnect is a hard failure on its own, and the verdict
-names the tunnel-ping timeouts that preceded it (three per reconnect means the liveness ping itself is failing).
-The sample guard is the point: a probe on a broken session sends a handful of packets and still prints a
-confident loss percentage (255 of 4688 sent, "60.78 % loss"); below SAMPLE_MIN_PCT of the expected count the arm
-is UNMEASURED. Each arm gets its own session because arms sharing one were order-dependent (82.7 % then 0.41 %).
-There is deliberately no XFAIL here: an earlier bound came from a number contaminated by the SURB ramp."""
+Idle arm: FAIL on any reconnect, WARN on a tunnel-ping timeout without one. Loaded arms, checked in this order:
+FAIL RECONNECT on any reconnect (the verdict names the count, the tunnel-ping timeouts before it, rebinds and
+outage seconds; three timeouts per reconnect means the liveness ping itself is failing); FAIL UNMEASURED when the
+probe sent under SAMPLE_MIN_PCT of the expected RATE*1e6/8/SIZE*duration packets (a probe on a dead session sends
+a handful and still prints a confident percentage: 255 of 4688, "60.78 % loss"); FAIL on no loss figure; FAIL at
+loss >= LOSS_MAX or a gap over STALL_MAX s; PASS otherwise.
+
+Why: the fleet recorded 54-96 % loss at 1.5 Mbit/s on a path whose TCP throughput looked fine. Each arm has its own
+session because arms that shared one were order-dependent (82.7 % then 0.41 %). The after-bulk arm isolates what
+T09 stumbled on: a 3 Mbit/s stream straight after bulk transfers on hoprd 4.1.3 showed 9-54 reassembly failures.
+Until 2026-09-19 there were six rate arms and every one reconnected at ~50 s whatever the rate: that was the
+liveness ping aimed at an address the server did not hold (T01 checks it now), not load. No XFAIL here: the one
+that was tried came from a number contaminated by the SURB ramp."""
 import time
 
 from suitelib.client import connect_or_fail

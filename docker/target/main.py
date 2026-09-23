@@ -12,7 +12,8 @@ import speedtarget
 import streamsrv
 
 SERVICES = {
-    "speedtarget": lambda: speedtarget.serve(int(os.environ.get("HTTP_PORT", "8899"))),
+    "speedtarget": lambda: speedtarget.serve(int(os.environ.get("HTTP_PORT", "8899")),
+                                             seed=int(os.environ.get("SPEEDTARGET_SEED", speedtarget.DEFAULT_SEED))),
     "callecho": lambda: callecho.serve(int(os.environ.get("ECHO_PORT", "8901"))),
     "streamsrv": lambda: streamsrv.serve(int(os.environ.get("STREAM_PORT", "8902"))),
     "callsrv": lambda: callsrv.serve(int(os.environ.get("CALL_PORT", "8903")), os.environ.get("CALLSRV_LOGDIR", "/root/callsrv")),

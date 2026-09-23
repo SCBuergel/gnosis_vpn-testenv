@@ -1,6 +1,15 @@
-"""T32-congestion-control (runbook): client-host TCP congestion control A/B, cubic vs bbr (+fq) set inside the
-client's network namespace (docker --sysctl, restart per arm), ABBA order over PAIRS pairs; upload is the treated
-direction, download the null-direction control. Needs tcp_bbr on the host. Reports paired ratios and sign counts."""
+"""T32-congestion-control (runbook): does the client host's own TCP stack limit the tunnelled upload, independently
+of the VPN? cubic vs bbr (+fq) set inside the client's network namespace (docker --sysctl, restart per arm), ABBA
+order over PAIRS pairs, one download and one upload of BYTES per arm; upload is the treated direction and download
+the null-direction control (its sender is the far end, so it must not move). Needs tcp_bbr on the host; SKIP
+otherwise. WARN when no valid pair was measured or a client restart fails, with a summary row saying the A/B was
+abandoned; the default client is restored whatever happens. Otherwise PASS, recording the bbr/cubic paired ratio
+and sign count per direction and the number of pairs.
+
+Why: BBR + fq raised the fleet upload 5.4 to 8.1 Mbit/s (NL), and the nightly A/B held at +82 % with 13/13 pairs
+agreeing while download stayed null (+4 %, 8/13). It is the only client-side no-build lever found, it silently
+inflates every upload figure taken after a host was switched, and the win belongs to the path (it reversed to
+-13 % on a direct 18 ms link), so it must be re-measured per exit."""
 import os
 import statistics as st
 

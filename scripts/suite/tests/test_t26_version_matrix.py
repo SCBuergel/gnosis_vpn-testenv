@@ -1,6 +1,10 @@
-"""T26-version-matrix (runbook): not a single-stack test. Run `just matrix cells.txt` with one line per cell; each
-cell brings the stack up with its client image / hoprd binary / env and runs the suite. This only records which
-cell it is running in."""
+"""T26-version-matrix (runbook): which component's version change causes a regression? Not a single-stack test:
+`just matrix cells.txt` brings the stack up per cell (client image, hoprd binary, env) and runs the suite in it,
+with a second pass in reverse order so wall clock and version are not confounded. This module only records which
+cell it runs in.
+
+Why: a 2x2 was the instrument that separated 'the client regressed' from 'the nodes regressed', and the reversed
+repeat is what proved the effect was not drift after a real finding had been wrongly retracted on that suspicion."""
 TEST = "T26-version-matrix"
 KIND = "runbook"
 KNOBS = {}

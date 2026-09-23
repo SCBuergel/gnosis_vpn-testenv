@@ -1,8 +1,18 @@
-"""T12-balancer-sweep (gate): cells over [connection.surb_balancing.main] max_surb_upstream (UPSTREAMS Mb/s) and a
-raised ping tier (10 MB / 16 Mb/s); per cell connect time, a cold first download, a warm download, and the exit
-node's logged session target. Reverse order on a second pass. Pass: no cell collapses (warm download >= 0.3 x best).
-Then the masking cell: a raised ping tier must not be what makes a cold start work; if the default ping tier
-fails the cold start and the raised one passes, the tuning is masking a default-config defect."""
+"""T12-balancer-sweep (gate): how do the client's SURB balancer profiles move connect time, cold-start behaviour and
+steady-state throughput, and where does the sweep collapse? Cells over [connection.surb_balancing.main]
+max_surb_upstream in UPSTREAMS plus one cell with the raised ping tier (10 MB / 16 Mb/s); each cell restarts the
+client with the config, connects (recording the time), runs one cold and one warm download of BYTES, and reads the
+exit's session target. PASSES passes, even ones in reverse order. Then the masking cell: a cold download on the
+default ping tier against one on the raised tier.
+
+Pass iff the best warm download > 0 and the worst warm download across cells >= 0.3 x the best; and the masking
+cell's cold download on the default ping tier completes within CAP (n = 1), whatever the raised tier did (both are
+named, so a raised tier that passes shows the tuning masks a default-config defect). The masking cell is n = 1 and
+the collapse is intermittent, so its PASS does not distinguish a fixed ramp from a lucky probe; check its
+sensitivity before trusting it.
+
+Why: 96 Mb/s collapsed downloads under a frame-discard storm while 48 was at baseline, and the raised ping tier was
+exactly the tuned config that hid the 0.96.1 ramp bug for a day. The axis has a known cliff and a known mask."""
 import re
 import shutil
 import time

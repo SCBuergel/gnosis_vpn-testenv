@@ -49,14 +49,14 @@ CLIENT_EXTRA_ARGS := env_var_or_default("CLIENT_EXTRA_ARGS", "")   # appended to
 CLIENT_EXTRA_ENV  := env_var_or_default("CLIENT_EXTRA_ENV", "")    # "K=V K=V", e.g. GNOSISVPN_SURB_RAMP_SECS=0 (T25-knob-ab)
 CLIENT_SYSCTL     := env_var_or_default("CLIENT_SYSCTL", "")       # e.g. net.ipv4.tcp_congestion_control=bbr (T32-congestion-control)
 
-# Bounded container logs (catalogue extension 5)
+# Bounded container logs (soak safety)
 LOG_MAX_SIZE := env_var_or_default("LOG_MAX_SIZE", "300m")
 LOG_MAX_FILE := env_var_or_default("LOG_MAX_FILE", "3")
 
 # Also generate 0-hop destinations (node-N-h0) next to the HOPS ones — needs CLIENT_EXTRA_ARGS=--allow-insecure (T30-hopcount-ab)
 HOPS0_ALSO := env_var_or_default("HOPS0_ALSO", "0")
 
-# In-cluster traffic target (catalogue extension 2) and suite output.
+# In-cluster traffic target and suite output.
 # The target sits on its own Docker network with a NON-private subnet: the client keeps RFC1918 ranges off the
 # tunnel, so a target on Docker's 172.17/16 bridge would be routed around the exit. 198.18.0.0/15 is the
 # RFC 2544 benchmarking range; every exit server is attached to this network and NATs into it.
@@ -125,29 +125,6 @@ build-client-native:
 
 # Build all components
 build: build-cluster build-server build-client
-
-# Build a Ubuntu-based (glibc 2.39) client image from glibc binaries (a cargo build or an unpacked .deb): build-client-glibc DIR TAG [REVISION]
-# REVISION (the source commit) is stored as the OCI label org.opencontainers.image.revision and recorded by T02-build-provenance.
-build-client-glibc bin_dir tag="gnosis_vpn-client" revision="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ctx=$(mktemp -d)
-    cp "{{bin_dir}}/gnosis_vpn-root" "{{bin_dir}}/gnosis_vpn-worker" "{{bin_dir}}/gnosis_vpn-ctl" "${ctx}/"
-    cp "{{GVPN_CLIENT_DIR}}/docker/entrypoint.sh" "${ctx}/"
-    cp "{{justfile_directory()}}/docker/client-glibc/Dockerfile" "${ctx}/"
-    docker build -q -t "{{tag}}" --label "org.opencontainers.image.revision={{revision}}" "${ctx}" && echo "built {{tag}} from {{bin_dir}} (revision '{{revision}}')"
-    rm -rf "${ctx}"
-
-# Build a Ubuntu-based (glibc 2.39) exit-server image from a glibc binary: build-server-glibc BIN TAG [REVISION]
-build-server-glibc bin tag="gnosis_vpn-server" revision="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ctx=$(mktemp -d)
-    cp "{{bin}}" "${ctx}/gnosis_vpn-server"
-    cp "{{GVPN_SERVER_DIR}}/docker/config.toml" "{{GVPN_SERVER_DIR}}/docker/wggvpn.conf" "{{GVPN_SERVER_DIR}}/docker/wrapper.sh" "${ctx}/"
-    cp "{{justfile_directory()}}/docker/server-glibc/Dockerfile" "${ctx}/"
-    docker build -q -t "{{tag}}" --label "org.opencontainers.image.revision={{revision}}" "${ctx}" && echo "built {{tag}} from {{bin}} (revision '{{revision}}')"
-    rm -rf "${ctx}"
 
 # Build the in-cluster traffic target image (sized HTTP target, UDP echo, stream server, call server)
 build-target:
@@ -741,9 +718,13 @@ suite *args:
     eval "$(just _suite-env)"
     exec python3 "{{justfile_directory()}}/scripts/suite/run.py" {{args}}
 
-# Offline self-tests: the suite library, and every probe against every target service on loopback (no stack needed)
-suite-selftest:
+# Offline self-tests: the suite library, the target's own tests, and every probe against every target service on loopback (no stack needed)
+suite-selftest: target-test
     python3 -m pytest "{{justfile_directory()}}/scripts/suite/selftest" -q
+
+# The traffic target's own tests (docker/target/tests), on loopback
+target-test:
+    cd "{{justfile_directory()}}/docker/target" && python3 -m pytest -q
 
 # The daily battery: build the sibling checkouts AS THEY ARE (nothing here pulls or pins upstream tags; the timer's
 # job is to check them out at the versions to test first), bring the stack up, run the suite (--fast by default; pass

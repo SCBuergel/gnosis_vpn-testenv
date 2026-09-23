@@ -1,6 +1,13 @@
-"""T31-frame-forensics (runbook): read-length histogram and slab analysis of every inbound datagram during a cold
-start. Needs a client image built with the inbound-read instrumentation (catalogue extension 12) that logs
-'inbound datagram ... len=N'; skips when the running image does not emit those lines."""
+"""T31-frame-forensics (runbook): when the client rejects inbound traffic, what exactly is arriving? One cold
+connect and one download of BYTES on a client built with the inbound-read instrumentation (open extension 3),
+which logs 'inbound datagram ... len=N'; SKIP when the running image does not emit those lines. Reduces the log to
+a read-length histogram, the fraction failing decapsulation, and a slab analysis grouping reads into runs (a
+sequence of frame_size reads ended by a short one). PASS iff no packed slab is found, i.e. no run of inbound reads
+summing to more than 1500 B before a short read; FAIL names the slab count and the failed-read fraction.
+
+Why: the only technique that produced proof rather than inference about the datagram-boundary defect. Healthy: 600
+reads, 0 failed, max 1452 B. Broken: 256 reads, 95 % failed, 201 of exactly 1500 B and all 201 failing, each packed
+run a whole-datagram slab of 14-16 kB under the 16 384-byte bridge buffer."""
 import collections
 import re
 

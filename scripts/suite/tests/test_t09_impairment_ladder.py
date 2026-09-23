@@ -1,10 +1,21 @@
-"""T09-impairment-ladder (gate): the exit's return relays are impaired live with tc netem on the host (no cluster
-restart, no chain rebuild). ladder: rungs of delay on EVERY relay (equal) vs on ONE relay (gap); far: one relay at
-FAR ms. Gate: every equal-latency cell completes with zero reassembly failures and zero reconnects. Gap and far
-cells are recorded. The stream runs FIRST on the fresh session (after bulk transfers it showed 9-54 reassembly
-failures and up to 71 % loss at 0 ms; that state is T06's dl-after-bulk arm now).
-Relay-set membership is varied by impairment, never by the channel API: a close/reopen inside one run leaves
-the channel PendingToClose and the exit with no usable return relay. Needs root for tc."""
+"""T09-impairment-ladder (gate): with a fixed forward path, how does the set of relays the exit can use for return
+traffic affect throughput and integrity? The exit's two return relays are impaired live with tc netem on the host
+toward their P2P ports: no cluster restart, no channel change (a close/reopen inside one run leaves the channel
+PendingToClose and the exit with no usable return relay, wedging every later test). Cells, each on a fresh
+session: equal-<ms> delays both relays by a rung of RUNGS, gap-<ms> delays relay 1 only, far-<FAR>ms pushes relay
+2 alone to FAR. Each cell runs a 3 Mbit/s download stream of STREAM_S first, then 3 (--fast 2) T04-style transfer
+reps. Needs root for tc; SKIP below CLUSTER_SIZE 3.
+
+Pass iff every equal cell has reassembly_failed = 0 and reconnects = 0. Gap and far cells, stream loss and
+transfer completion are recorded, not asserted. The stream runs first because after bulk transfers it showed 9-54
+reassembly failures and up to 71 % loss at 0 ms in three runs on hoprd 4.1.3 while T06's fresh-session stream read
+0.2 %; that post-bulk state is T06's dl-after-bulk arm now.
+
+Why: the first self-hosted exit's poor 1-hop performance was the default strategy spreading SURBs over relays with
+a 20-340 ms RTT mix: 0.2 Mbit/s and 300 discards, against 4.6-6.3 Mbit/s pinned to one near relay. One far relay
+alone only halved downloads; near plus far together collapsed uploads to 0.34 Mbit/s with 158 reassembly failures,
+and two far relays of equal RTT carried 3 Mbit/s cleanly. RTT mismatch is the defect, not distance. CLUSTER_LATENCY
+bakes a latency map into the localcluster for the same axis without tc."""
 import os
 
 from suitelib.client import ConnectFailed

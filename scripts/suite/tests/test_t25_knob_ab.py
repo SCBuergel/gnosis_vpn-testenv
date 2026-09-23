@@ -1,6 +1,12 @@
-"""T25-knob-ab (runbook): restart the cluster with one env var changed (KNOB="K=V"), everything else untouched,
-T04 both ways. CLIENT_KNOB applies K=V to the client instead (e.g. GNOSISVPN_SURB_RAMP_SECS=0). Informational:
-records both cells' medians."""
+"""T25-knob-ab (runbook): does one environment knob on one component explain a regression? Restart the cluster
+with one env var changed (KNOB="K=V", default the relay decode concurrency at nproc x 8), everything else
+untouched, and run REPS (--fast 2) T04-style transfers both ways; CLIENT_KNOB applies K=V to the client instead
+(e.g. GNOSISVPN_SURB_RAMP_SECS=0). Nothing is asserted; both cells' medians are recorded. Every cluster node gets
+the same env (per-role env is open extension 1).
+
+Why: this is how both regressions were finally pinned (HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY was the hoprd
+fix) and how a plausible suspect, the exit's LIFO SURB pop order, was cleared in one run. A negative result here is
+as valuable as a positive one."""
 import os
 
 from suitelib import shell

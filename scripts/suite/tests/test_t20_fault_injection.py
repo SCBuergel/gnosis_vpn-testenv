@@ -1,6 +1,18 @@
-"""T20-fault-injection (diagnostic): loss ladder (tc netem loss on the host toward one relay's P2P port), then a
-full pause (SIGSTOP) of that relay and restore, all during a live call. Records loss per arm, whether the session
-survives and time to recover. Needs root for tc."""
+"""T20-fault-injection (diagnostic): what happens to a live session when a relay degrades or disappears? During a
+call: a tc netem loss ladder over LOSSES (%) on the host toward relay RELAY's P2P port, STEP_S per step, then a
+full pause of the relay process (SIGSTOP for STEP_S), then restore. The call lasts (1 + len(LOSSES) + 3) x STEP_S
+(until 2026-09-20 it was computed from the length of the LOSSES string and outran the script). SKIP unless root,
+SKIP when the cluster status carries no pid for RELAY (a SIGSTOP of pid 0 stops the runner's own process group),
+and SKIP naming the step when a tc qdisc or filter cannot be installed (an unimpaired tunnel would survive and
+pass).
+
+Each rung's 'tc qdisc change' is checked and recorded (applied per row); WARN when the session survived but a rung
+was not applied. Otherwise PASS iff the client is still connected after the ladder and the pause; a miss is WARN.
+Call loss, stalls and reconnects are recorded.
+
+Why: T09 varies latency and membership between sessions; nothing else touches a fault arriving mid-session, the
+real-world case. Upstream documents it as hazardous both ways: killing a return relay can collapse even a 0-hop
+forward direction, and the automatic recovery is destructive on a false positive."""
 import os
 import signal
 import time

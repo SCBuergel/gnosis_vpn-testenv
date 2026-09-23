@@ -12,14 +12,21 @@ of testing, which also rate-limited the exit's real users). A local target has n
 endpoint, and keeps every run comparable with every other. The content is pseudo-random (one 1 MiB block
 repeated), so a deflate-class compressor or the tunnel cannot shrink it into a throughput that was never carried
 (a long-window codec such as xz would still find the 1 MiB period; nothing on this path runs one).
-Stdlib only. Threaded, no logging, no rate limiting by design."""
+The block's PRNG seed is an argument (--seed N, or SPEEDTARGET_SEED), printed at start, so two targets serve the
+same bytes and a run can say which content it moved. Stdlib only. Threaded, no logging, no rate limiting by design."""
+import argparse
 import os
 import random
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-CHUNK = random.Random(20260901).randbytes(1 << 20)
+DEFAULT_SEED = 20260901
 MAXB = 200 * 1024 * 1024
+CHUNK = random.Random(DEFAULT_SEED).randbytes(1 << 20)
+
+
+def make_chunk(seed):
+    return random.Random(seed).randbytes(1 << 20)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -80,12 +87,18 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, b'{"ok":true,"received":%d}' % (n - left), "application/json")
 
 
-def serve(port, host="0.0.0.0", server=None):
+def serve(port, host="0.0.0.0", server=None, seed=DEFAULT_SEED):
+    global CHUNK
+    CHUNK = make_chunk(seed)
     srv = server or ThreadingHTTPServer((host, port), Handler)
     srv.daemon_threads = True
-    print(f"speedtarget on {host}:{srv.server_address[1]}", flush=True)
+    print(f"speedtarget on {host}:{srv.server_address[1]} seed={seed}", flush=True)
     srv.serve_forever()
 
 
 if __name__ == "__main__":
-    serve(int(os.environ.get("PORT", "8899")))
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8899")))
+    ap.add_argument("--seed", type=int, default=int(os.environ.get("SPEEDTARGET_SEED", DEFAULT_SEED)))
+    a = ap.parse_args()
+    serve(a.port, seed=a.seed)

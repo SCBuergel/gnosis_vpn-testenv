@@ -1,8 +1,17 @@
-"""T11-capability-matrix (gate): cells over [connection.wg] capabilities: the default segmentation+no_delay,
-segmentation only, and the default plus no_rate_control. The exit's datagram mode keys off the client's no_delay
-flag and its egress shaper exists exactly when no_rate_control is absent. The shaper is detected from the exit's
-per-session SURB-balancer metrics (hopr_surb_balancer_*{session_id=...} appear exactly while it shapes a
-session); the "spawning exit SURB balancer" debug line is not emitted at the default node log level."""
+"""T11-capability-matrix (gate): does the tunnel behave as expected under each [connection.wg] capability set the
+client can request? Cells: segmentation+no_delay (the default; exit shaper expected), segmentation alone (expected),
+and the default plus no_rate_control (not expected). Each cell restarts the client with the set, connects, runs one
+CALL_S call and polls the exit's /metrics POLL_N times at 2 s for per-session hopr_surb_balancer_* series, which
+exist exactly while the exit shapes a session (the 'spawning exit SURB balancer' line is not logged at the default
+level). Decapsulation errors come from the client log.
+
+Pass iff, per cell, decap_error = 0 and the per-session balancer series count rose exactly when a shaper is expected.
+Call loss and download rate are recorded.
+
+Why: the exit's datagram mode on release/4.0 keys off the client's no_delay flag, so a client that drops it gets
+frames cut at frame_size again; no_rate_control measured inert for throughput but removes the shaper, so a fresh
+session then drops egress when SURBs run out instead of shaping. Config-only per cell and the only test that
+catches a capability-dependency regression on either side."""
 import re
 import shutil
 import time

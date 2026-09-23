@@ -1,6 +1,11 @@
-"""T18-capacity-ceiling (diagnostic): download-only UDP rate ladder until delivery collapses, node CPU sampled.
-Reports the knee (last rate with loss < 5 %) and CPU per node; below the knee the tunnel watchdog must not fire,
-above it the reconnects are counted (the former watchdog-under-saturation test is the top rung)."""
+"""T18-capacity-ceiling (diagnostic): how many packets per second can one exit and one relay carry, and at what
+CPU cost? One session, a download stream of STEP_S per rung of LADDER (Mbit/s) with node CPU sampled. Records the
+knee (the last rung with loss < 5 %; 8 Mbit/s on the reference stack), CPU per node, and watchdog reconnects: on
+rungs below the knee individually, above it summed (the former watchdog-under-saturation test is the top rung).
+
+Why: the fleet's exit hoprd topped out at ~2000 packets/s in+out (about one core), which is why 6 Mbit/s of 1200 B
+packets queued to 5-15 s on every relay set; the relay spent 280-360 % CPU forwarding the same rate. Both numbers
+are denominators every other test divides by."""
 import statistics as st
 import time
 

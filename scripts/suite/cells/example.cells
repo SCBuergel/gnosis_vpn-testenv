@@ -1,7 +1,7 @@
 # Cells for `just matrix scripts/suite/cells/<file>`: one stack per line, the suite runs once per cell (T26-version-matrix).
 # name|CLIENT_IMAGE|HOPRD_BIN|CLUSTER_ENV|CLIENT_EXTRA_ENV|LOCALCLUSTER_BIN
 #   name              label of the cell (run id suffix, `cell` field in rows/verdicts)
-#   CLIENT_IMAGE      client image tag (just build-client, or build-client-glibc DIR TAG for a cargo build)
+#   CLIENT_IMAGE      client image tag (just build-client)
 #   HOPRD_BIN         hoprd binary every cluster node runs; LOCALCLUSTER_BIN from the same tree (empty = the environment's)
 #   CLUSTER_ENV       "K=V K=V" for every node, e.g. HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64 (T25-knob-ab)
 #   CLIENT_EXTRA_ENV  "K=V K=V" for the client, e.g. GNOSISVPN_SURB_RAMP_SECS=0

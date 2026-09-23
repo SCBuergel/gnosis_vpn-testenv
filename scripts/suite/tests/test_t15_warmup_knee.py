@@ -1,8 +1,12 @@
-"""T15-warmup-knee (diagnostic): first-transfer throughput vs idle time after connect. A fresh session always warms
-up (the exit's shaper starts at its initial egress rate and the readiness gate has to clear), so "flat across the
-sweep" is not a healthy-stack property. What this measures is the KNEE: the idle time after which the first
-transfer reaches KNEE_FRAC of the best rung. T07 is the gate; this says how long the warm-up lasts.
-This test IS the delay sweep, so it opts out of the ramp wait."""
+"""T15-warmup-knee (diagnostic): how long must a fresh session idle before it carries full-rate traffic? One
+download of BYTES per delay in DELAYS after a fresh connect (ramp_wait_opt_out: this test is the delay sweep).
+Records the knee, the first delay at which the first download reaches KNEE_FRAC x the best delay's rate, and flags
+a knee beyond KNEE_MAX_S as a ramp defect. Nothing is asserted: a fresh session always warms up (the exit's shaper
+starts at its initial rate and the readiness gate has to clear), so 'flat across the sweep' is not a healthy-stack
+property and the gate is T07.
+
+Why: the knee sat at ~240 s on the broken client, exactly the ramp's length; it turns 'cold starts are bad' into a
+number a developer can match against a constant in the code."""
 from suitelib.client import connect_or_fail
 from suitelib.config import q
 from suitelib.stats import stats

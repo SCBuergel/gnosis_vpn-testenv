@@ -1,13 +1,20 @@
-"""T07-cold-start (gate): one arm measured immediately after connect, one after WARM s; also records the exit-side
-session SURB target before load. WARM is 25 s, past client 0.96.2's 20 s SURB ramp; it was briefly 75 s and that
-was harmful (a long post-connect idle lets the return-path SURBs expire, so the first transfer after it dies with
-a tunnel-ping reconnect, 8/8 on two hoprd versions). The cold arm opts out of the ramp wait: measuring the ramp is
-its job. The cold-start signal is a COLLAPSE (no completion, decap errors, a reconnect), not that the cold arm is
-slower: a fresh session measures the SURB ramp, whose first transfer is ~0.5x steady state by design (0.48, 0.34
-and 0.25 measured on clean cold starts), so the ratio is recorded with COLD_WARM_FIRST_RATIO as a reference.
-Gate: zero reconnects in both arms, the cold arm completes at least as many downloads as the warm one, and the
-cold arm's decapsulation errors stay under max(COLD_DECAP_FLOOR, COLD_DECAP_MULT x the warm arm's). Medians are
-recorded, not gated."""
+"""T07-cold-start (gate): does load applied straight after tunnel-up behave differently from load after the session
+has settled? Two T04-style arms of REPS transfers (--fast 1): cold measures immediately after connect
+(ramp_wait_opt_out: measuring the ramp is its job) and warm after WARM s. Also records the exit's session SURB
+target before load. WARM is 25 s, past client 0.96.2's 20 s SURB ramp; a 75 s idle was harmful (the return-path
+SURBs expired during it and the first transfer died with a tunnel-ping reconnect, 8/8 on two hoprd versions).
+
+Pass iff reconnects = 0 in both arms, the cold arm completes at least as many downloads as the warm arm, and the
+cold arm's decapsulation errors are at most max(COLD_DECAP_FLOOR, COLD_DECAP_MULT x the warm arm's). Medians and
+the cold/warm first-transfer ratio are recorded, not gated: a fresh session measures the SURB ramp, whose first
+transfer is about half of steady state by design (0.48, 0.34 and 0.25 on clean cold starts), so
+COLD_WARM_FIRST_RATIO is a reference only. The cold-start signal is a collapse (no completion, decap errors, a
+reconnect), not a slower first transfer.
+
+Why: the investigation started here. A cold start collapsed the tunnel (100 % decapsulation failures, DecapStalled,
+a reconnect loop) while a warm start was lossless, and both of the worst defects found were fresh-session defects.
+Not implemented: the exit's max_surbs_per_sec promotion time, the 'failed to adjust surb balancer' count, the
+first-15-s delay bubble, and keep-alives from a closed session after disconnect."""
 from suitelib.client import connect_or_fail
 from suitelib.config import q
 from suitelib.target import summary_row, transfer_series

@@ -1,9 +1,19 @@
-"""T08-relay-attribution (gate): parses the client's path-planner lines during a download and counts resolved
-return paths per first-hop relay (the 20-byte address inside path=[...], not the destination field).
-membership (gate): every return path's first hop is an open outgoing channel of the exit.
-split (gate only when the relays carry equal injected latency, diagnostic otherwise): SPLIT_TOL_PCT is 60 %,
-not near-even, because the split legitimately varies by version (51/49 to 85/15); it fails only when one relay
-carries under ~20 % of return paths."""
+"""T08-relay-attribution (gate): which relay carries the return traffic, and is the split what the topology implies?
+One download of BYTES after a 10 s idle (floored to SURB_RAMP_WAIT) with the client at hopr_transport::path=debug;
+counts 'resolved return path' lines per first-hop relay. The relay is the 20-byte chain address inside path=[...];
+the destination= field is a 32-byte offchain key, and three wrong return-relay stories came from reading it as the
+relay. The debug target writes ~50 MB/min, so it is scoped to this test.
+
+Membership (gate): every return path's first hop is an Open outgoing channel peer of the exit, or the exit itself.
+Split (gate only with SUITE_EQUAL_LATENCY=1, at least 2 relays and SPLIT_MIN_PATHS paths; recorded otherwise):
+skew = 100 * (max - min) / sum <= SPLIT_TOL_PCT. 60 is not near-even on purpose: the split varies by release and
+by session (about even on some reference runs, 86/14 on others; 9711/8254 passed, 10764/1822 failed), so the gate
+fails an 80/20 split and beyond and is kept as a signal by decision. WARN when the log has no resolved-path lines.
+
+Why: the split was ~85/15 on one version line and ~51/49 on another, a real behavioural change no throughput
+number shows, and it stops a regression being blamed on 'the second relay' when 85 % of return traffic never
+touched it. Candidates are exactly the exit's Open outgoing channels; a PendingToClose one drops out within a
+minute, and one dead candidate fails about half of all health checks."""
 import collections
 import re
 

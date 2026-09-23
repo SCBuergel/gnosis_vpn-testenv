@@ -1,7 +1,14 @@
-"""T19-background-load (diagnostic): client 1 downloads while client 2 is idle (control), then while client 2
-fetches TRICKLE_KB every 2 s through the same exit. Degradation proportional to bytes is expected; a trickle arm
-that falls below STEP_FRAC of the idle control is the step change this test exists for and is reported as WARN
-(a diagnostic never fails the run)."""
+"""T19-background-load (diagnostic): how much does any other activity on the same exit cost the client doing real
+work? Client 1 downloads BYTES while client 2 is idle (control), then while client 2 fetches TRICKLES kB every 2 s
+through the same exit, one arm per size. SKIP unless CLIENT2 runs. Degradation proportional to bytes is expected;
+a trickle arm that falls below STEP_FRAC of the idle control is the step change this test exists for. WARN (a
+diagnostic never fails the run) when the idle control does not complete or any trickle arm is incomplete or below
+STEP_FRAC x the idle rate; client 1's rate per arm and its ratio to idle are always recorded.
+
+Why: on four 2-slot exits an idle neighbour let the download finish at 4.4-6.6 Mbit/s, a 10 kB/2 s trickle cut it
+to 1.4-2.0 and it hit the cap, and ten times the bytes changed nothing further; uploads were untouched. The scarce
+resource is return-path capacity spent per request, not per byte. It is the most realistic multi-user scenario
+there is and far cheaper than T22."""
 import time
 
 from suitelib.client import ConnectFailed, connect_or_fail

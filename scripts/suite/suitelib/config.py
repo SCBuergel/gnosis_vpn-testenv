@@ -23,6 +23,7 @@ def q(normal, fast):
 VERY_FAST = {
     "BYTES": 2000000, "CAP": 30, "REPS": 1,
     "T03_N": 3,
+    "T04_SIZES_MIB": "1 2",
     "T05_PHASE_S": 8, "T05_PARALLEL": "1 3",
     "T06_ECHO_DUR": 15, "T06_STREAM_DUR": 15,
     "T09_RUNGS": "0 25", "T09_STREAM_S": 8,

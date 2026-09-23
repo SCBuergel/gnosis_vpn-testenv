@@ -1,7 +1,15 @@
-"""T02-build-provenance: version strings and the compiled-in HOPR wire-protocol identifiers of the client worker
-and hoprd; asserts one protocol id across the two. The exit server drives its hoprd node over REST and embeds no
-wire-protocol id (checked: the binary holds no /hopr/ string), so its version is recorded and an id is compared
-only if a future build carries one. Writes provenance.json."""
+"""T02-build-provenance (gate): what is running, and can the pieces talk to each other? Records the version
+strings and image digests of the client, hoprd and the exit server, the OCI revision label where an image carries
+one, and the compiled-in HOPR wire-protocol id (/hopr/mix/<ver>) of the client worker and hoprd. Writes
+provenance.json for the run.
+
+Pass iff both protocol ids are readable and equal; FAIL when both are present and differ; WARN when either cannot be
+read. The exit server drives its hoprd node over REST and embeds no id (its binary holds no /hopr/ string), so its
+version is recorded and it joins the comparison only if a future build carries one.
+
+Why: a release's lockfile once claimed a library version, from another branch with a wire-format change and a
+bumped protocol id, that was not in the shipped binary. A HOPR packet's frame size does not depend on its content,
+so mismatched versions misparse instead of failing to connect; reading the ids out of the binaries settles it."""
 import hashlib
 import json
 import time
@@ -33,7 +41,7 @@ def test_build_provenance(cfg, run, client, checks, knobs):
     sp = shell.out(["docker", "exec", cfg.server, "sh", "-c", "grep -aoE -m1 '/hopr/mix/[0-9.]+' ./gnosis_vpn-server"], timeout=120)
     ci = shell.out(["docker", "inspect", "-f", "{{.Config.Image}} {{.Image}}", client.name], timeout=30)
     si = shell.out(["docker", "inspect", "-f", "{{.Config.Image}} {{.Image}}", cfg.server], timeout=30)
-    # the glibc images carry the source commit as an OCI label (build-client-glibc/build-server-glibc REVISION=...)
+    # an image built with --label org.opencontainers.image.revision=<commit> names its source commit here
     crev = shell.out(["docker", "inspect", "-f", '{{index .Config.Labels "org.opencontainers.image.revision"}}', client.name], timeout=30)
     srev = shell.out(["docker", "inspect", "-f", '{{index .Config.Labels "org.opencontainers.image.revision"}}', cfg.server], timeout=30)
     lcv = (shell.out([cfg.localcluster_bin, "--version"], timeout=30) or "").splitlines()[:1]

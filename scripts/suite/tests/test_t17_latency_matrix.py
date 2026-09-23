@@ -1,7 +1,11 @@
-"""T17-latency-matrix (diagnostic): N hoprd pings per ordered node pair (min/median/mean/max/stdev) plus a peer
-survey from node 0. On a single host the medians are ~2-3 ms and say little, so this is a control, except when
-the cell injected an impairment map (SUITE_LATENCY_MAP="idx=ms ..."), in which case it gates: the measured pair
-medians from node 0 must show the configured delay, or every rung above it is meaningless."""
+"""T17-latency-matrix (diagnostic): the real RTTs between the controlled nodes. N hoprd pings per ordered node
+pair (min/median/mean/max/stdev) plus a peer survey from node 0 over its connected table. On one host the medians
+are 2-3 ms and say little; the stdev tail is the signal (STDEV_MAX is declared, not asserted). With
+SUITE_LATENCY_MAP="idx=ms ..." (a cell that injected a latency map) it gates: the node0->idx median must be within
+LATENCY_TOL_MS of ms plus the node0->node1 median, or at least ms, or every rung above it is meaningless.
+
+Why: a few hundred pings identified the saturated relay of T01's forwarding probe by its jitter tail before that
+probe existed, and the matrix tells a test author which impairment rungs are realistic."""
 import time
 
 from suitelib.stats import stats

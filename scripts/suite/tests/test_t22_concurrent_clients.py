@@ -1,14 +1,21 @@
-"""T22-concurrent-clients (gate): N client containers download through the same exit at the same time, over the
-rungs in LADDER (clamped to the clients actually running). Pass: (a) every client connects and completes its
-transfer at every rung, and (b) aggregate throughput never COLLAPSES as clients are added: no higher rung may
-fall more than TOL_PCT below any lower rung's aggregate (one-sided: aggregate rising with concurrency is the
-healthy shape here, 10.6, 13.7, 16.1 Mbit/s at 1, 2, 4 clients). Per-client throughput is expected to fall as
-clients are added, so nothing is asserted per client beyond completion; fairness is recorded. The top rung's
-aggregate is held against AGG_MIN_MBIT. Every client is WARMED before the measured transfer, or each rung would
-measure the SURB ramp (T07) instead of concurrency. Every client's rung is diagnosed: its warm-up result, whether
-it was Connected right before the measured transfer, its reconnects and tunnel-ping timeouts, and any Disconnect
-command it received (the deadman bug's only trace was one such line in 42 000 lines of debug).
-Setup: CLIENT_COUNT=N with a cluster created with EXTRA_IDENTITIES=N, then `just clients-start`."""
+"""T22-concurrent-clients (gate): how does the stack behave as simultaneous clients increase? N client containers
+download BYTES through the same exit at the same time, over the rungs in LADDER (clamped to the clients running;
+SKIP below 2). Every client is warmed with WARMUP_BYTES before the measured transfer, or each rung would measure the
+SURB ramp (T07) instead of concurrency. Every client's rung is diagnosed: warm-up result, whether it was Connected
+right before the measured transfer, reconnects and tunnel-ping timeouts, and any Disconnect command it received
+(the deadman bug's only trace was one such line in 42 000 lines of debug).
+
+Per rung: FAIL if any client fails to connect or does not complete within CAP, naming per incomplete client its
+bytes, HTTP code and the diagnosis above. Across the ladder, only when every rung completed: PASS iff no higher
+rung's aggregate falls more than TOL_PCT below any lower rung's (one-sided: aggregate rising with concurrency is
+the healthy shape on a stack where one client cannot saturate the exit; 10.6, 13.7, 16.1 Mbit/s at 1, 2, 4
+clients, and the earlier symmetric rule failed that ladder) and the top rung's aggregate is at least AGG_MIN_MBIT.
+Per-client throughput is expected to fall with N; fairness is recorded, not asserted.
+
+Why: the fleet's ladders found a hard break at a specific client count and a plateau far under the no-VPN baseline
+(38-49 Mbit/s aggregate from n~7, admissions stopping at 14-16, zero-byte transfers from n=12, while the same
+16 clients shared ~220 Mbit/s without the VPN). Setup: CLIENT_COUNT=N on a cluster created with
+EXTRA_IDENTITIES=N, then `just clients-start`."""
 import time
 from concurrent.futures import ThreadPoolExecutor
 

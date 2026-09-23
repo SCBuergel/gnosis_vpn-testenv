@@ -1,9 +1,21 @@
-"""T23-sustained-soak (gate): a 1.5 Mbit/s bidirectional call plus a transfer pair every INTERVAL s for DUR s,
-sampling error counters, reconnects, worker RSS and client log growth. Pass: no reconnect, no unbounded RSS growth
-(last < 2 x first), log rate < LOG_MB_MIN_MAX MB/min (the client writes ~70 MB/min at hopr_transport::path=debug;
-the gate exists for logging hot loops, 1.6 GB/min was the incident), call loss < CALL_LOSS_MAX % (T06's LOSS_MAX
-for the same probe: a soak that delivers 24 % of its call must not pass; a missing report counts as 100 %).
-The soak must outlive the deadman: deadman_cover raises it above DUR."""
+"""T23-sustained-soak (gate): does a stack that passes a 3-minute test still pass after an hour? A CALL_RATE Mbit/s
+bidirectional call for DUR s plus one download and one upload of BYTES every INTERVAL s, sampling error counters,
+reconnects, worker RSS and client log growth at each interval. The session outlives the deadman through
+client.deadman_cover(DUR + INTERVAL + 2 * (CAP + 30)): under the 900 s default the client was disconnected at
++15 min, the call delivered 24 % (900/3600) and the verdict was still PASS, because a deadman disconnect is not a
+reconnect.
+
+FAIL UNMEASURED when the call sent under SAMPLE_MIN_PCT of its expected CALL_RATE*1e6/8/1200*DUR packets (a send
+the kernel refused on a missing interface is send_failed, never sent or loss). Otherwise PASS iff reconnects = 0,
+final worker RSS < 2 x initial + 200000 kB, client log growth < LOG_MB_MIN_MAX MB/min (the client writes ~70
+MB/min at hopr_transport::path=debug; the gate is for hot loops, 1.6 GB/min in the incident that motivated it) and
+call loss < CALL_LOSS_MAX (T06's bound for the same probe at the same rate; a missing report counts as 100 %).
+Stalls and reassembly failures are recorded.
+
+Why: the defect that started the investigation appeared ~30 minutes into a clean call as opener-cache starvation
+and a reconnect loop; short tests were green throughout. A soak also caught a relay silently rejecting tickets for
+2.5 hours, and the log-rate check is the only thing that catches a logging or discovery hot loop (a 0.94.1 client
+wrote 1.6 GB/min and 34 GB in a few hours) before it takes the host down."""
 import time
 
 from suitelib.client import connect_or_fail

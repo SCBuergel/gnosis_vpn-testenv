@@ -1,9 +1,18 @@
-"""T13-mtu-sweep (gate): MTU is a mechanism switch, not a tuning knob: at <=940 B a datagram fits one HOPR packet so
-no opportunistic second SURB is minted. Until 2026-09-20 this was an XFAIL tagged hoprnet#8392 (reconnects at
-1420 and 1280, clean at 940); on hoprd 4.1.3 the overflow is gone, so this is the plain gate the XFAIL was
-waiting to become: zero reconnects at every MTU. FIXED_BY names the mechanism for the day it comes back.
-The 940 rung's download median is held against MTU940_DOWN_MIN_MBIT (measured 12.3 on the reference stack; 6 sits
-under T04's 7 because a 940 B MTU carries about a third more packets per byte)."""
+"""T13-mtu-sweep (gate): does the size of the datagram the client emits change what the session does? Per MTU in
+MTUS: force it on the tunnel interface right after connect (asserted from the interface, not the config), run
+REPS (--fast 2) T04-style transfers and a 3 Mbit/s upload stream of STREAM_S.
+
+Pass iff reconnects = 0 at every MTU (the FAIL names the MTUs that reconnected and says when the shape is the old
+mechanism: 1420 and 1280 reconnect, 940 clean) and the download median at MTU 940 is at least
+MTU940_DOWN_MIN_MBIT (12.3 on the reference stack; 6 sits under T04's 7 because a 940 B MTU carries about a third
+more packets per byte). Until 2026-09-20 this was an XFAIL tagged hoprnet#8392; on hoprd 4.1.3 every MTU passed
+and T24 ran 900 s at 1420 with 0 % loss, so the gate is plain and FIXED_BY names the mechanism for the day it
+returns.
+
+Why: MTU is a mechanism switch, not a tuning knob. At <= 940 B a datagram fits one HOPR packet, so no
+opportunistic second SURB is minted, and that alone turned the sustained-upload death at +371 s into a clean
+10-minute run while throughput did not change either way (9.15 vs 9.75 Mbit/s). A sweep reporting only Mbit/s would
+have called it a null result."""
 from suitelib.client import connect_or_fail
 from suitelib.config import q
 from suitelib.target import summary_row, transfer_series

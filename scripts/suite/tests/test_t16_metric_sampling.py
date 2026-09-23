@@ -1,8 +1,17 @@
-"""T16-metric-sampling (diagnostic): 1 Hz samples of every node's counters and CPU, the client and server
-container CPU, plus the client's balancer estimate, during one download+upload; then summary numbers: exit-side
-session target and estimate (max over sessions, not the sum: closed sessions stay in the gauge for hours),
-relay egress ring drops, rejected counters, and the balancer-level vs per-second-throughput correlation (report
-the slope, not the gauge). Covariate: the health-check sessions the exit served during the window."""
+"""T16-metric-sampling (diagnostic): what is the node doing while the client sees a problem? Samples every node's
+counters and CPU, the client and server container CPU and the client's balancer estimate at 1 Hz through one
+download of 2 x BYTES and one upload of BYTES after a 5 s idle (floored to SURB_RAMP_WAIT). Records the exit's
+balancer target and estimate maxima (hopr_surb_balancer_current_buffer_{target,estimate}, max over sessions, not
+the sum: closed sessions stay in the gauge for hours), per-node egress-drop and rejected-count deltas, forwarded
+and sent packets/s maxima, node and container CPU, the balancer-level vs per-second-throughput correlation with
+its slope, and the health-check sessions the exit served during the window (covariate).
+
+Why: this proved the exit was not the bottleneck in the hoprd regression (380-560 packets/s sent in bad runs vs
+830-860 in good ones, mixer queue under 400, SURB buffer never starved) and measured the client ramp directly (the
+target climbing 147 units every 4.06 s). Report the slope, not the gauge: a balancer 'under pressure' 40 % of the
+time had the same download speed below and above target (r = 0.19). hoprd exposes no packet-drop counter; absence of
+a drop metric is not absence of drops. Not implemented: the exit's 'no surb for pseudonym' count under load,
+relay-side sampling, and the join of every host on one time axis."""
 import json
 import statistics as st
 import time

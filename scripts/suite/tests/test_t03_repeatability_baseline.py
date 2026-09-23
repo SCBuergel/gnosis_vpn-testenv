@@ -1,7 +1,13 @@
-"""T03-repeatability-baseline (diagnostic): N unchanged warm T04 cells back to back on one stack; records medians,
-spread and the minimum detectable effect at REPS transfers (mde_pct), so the headroom of the suite's absolute
-thresholds can be judged for this stack. Flags UNSTABLE above UNSTABLE_PCT. Runs third so the stack's
-repeatability is on record before any gate reads a number."""
+"""T03-repeatability-baseline (diagnostic): how many repetitions does a claim of a given size need on this stack?
+N warm T04-style cells back to back (connect, 20 s idle floored to SURB_RAMP_WAIT, one download and one upload of
+BYTES), nothing changed between them. Records n, median and stdev per direction and mde_pct, the minimum
+detectable effect of a REPS-transfer median: the larger over the two directions of
+2 * 1.96 * stdev / mean / sqrt(REPS) * 100. Above UNSTABLE_PCT it records UNSTABLE BASELINE; nothing consumes the
+number, it is there so the thresholds' headroom can be judged. Runs third, before any gate reads a number.
+
+Why: on the fleet, single-client deviations were as large as the medians and one exit varied 2x between two
+ladders. Without this number a comparison is unfalsifiable, and the investigation's most expensive errors were
+reading drift as an effect and an effect as drift."""
 import json
 
 from suitelib.client import connect_or_fail
