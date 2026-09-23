@@ -68,7 +68,7 @@ Versions, image digests, OCI revision labels and the compiled-in `/hopr/mix/<ver
 
 ### T04-fixed-throughput · **gate**
 
-One session; `REPS` cycles of download-then-upload at each of `SIZES_MIB`="1 10 50" MiB ("1 10"; `--very-fast` "1 2"), `CAP` each, per-second stall detection, client-log counters, undecodable telemetry delta. `WAIT_AFTER_CONNECT`=0 (floored to `SURB_RAMP_WAIT`). PASS iff every transfer completes both ways, `reassembly_failed`=0, `reconnects`=0, and the medians at the largest size ≥ `DOWN_MIN_MBIT`=7 / `UP_MIN_MBIT`=7. Discards, decap errors and per-size medians recorded.
+One session; `REPS` cycles of download-then-upload at each of `SIZES_MIB`="1 10 50" MiB ("1 10"; `--very-fast` "1 2"), `CAP` each, per-second stall detection, client-log counters, undecodable telemetry delta. `WAIT_AFTER_CONNECT`=0 (floored to `SURB_RAMP_WAIT`). PASS iff every transfer completes both ways, `reassembly_failed`=0, `reconnects`=0, and the medians at the largest size ≥ `DOWN_MIN_MBIT`=7 / `UP_MIN_MBIT`=7. Discards, decap errors and per-size medians recorded. Known FAIL on the reference stack: the 50 MiB download stalls after 25-30 MB (frame-discard burst, zero progress to the cap, tunnel-ping reconnect; run r3t04, 2026-09-23); `--fast` passes. See the module docstring.
 
 ### T05-loaded-latency · **gate**
 

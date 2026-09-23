@@ -10,6 +10,14 @@ decapsulation errors and the smaller sizes' medians are recorded, not asserted. 
 reads 10.9 down (stdev 0.45) and 13.0 up (stdev 0.69) over ten warm 10 MB sessions; the 2026-09 relay
 decode-concurrency regression halved throughput, so 7 catches a halving and clears host noise (+-12 %).
 
+Known FAIL on the reference stack at full length (2026-09-23, run r3t04, hoprd 4.1.3 + client 0.96.3): two of
+three 50 MiB downloads ran at 10-19 Mbit/s for 17-23 s (25-30 MB), hit a burst of frame discards (355 and 163 in
+ten seconds), then delivered nothing until the 90 s cap; five tunnel-ping timeouts and one reconnect followed,
+and the third 50 MiB download completed on the fresh session. 1 and 10 MiB and every 50 MiB upload bar the one
+on the dead session completed; the exit and relays logged nothing beyond routine SURB evictions. That is the
+download-side collapse of exploration/deep-2026-09-22, now reproduced by a plain TCP download; the 10 MB
+transfer is too short to reach it. --fast (SIZES_MIB "1 10") passes.
+
 Why: this harness produced every cell of the investigation, and its three outputs do not substitute for each
 other: completions caught truncation, Mbit/s caught the 2x relay regression, the error counters caught the client
 regression (uploads at 10 Mbit/s while downloads died at 0.37; a mean would have read 5 and hidden both). curl runs
