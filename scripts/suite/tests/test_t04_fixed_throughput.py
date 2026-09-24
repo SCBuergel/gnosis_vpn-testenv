@@ -14,7 +14,8 @@ relay decode-concurrency regression halved throughput, so 7 catches a halving an
 size above 10 MiB has been calibrated as a rate, which is why the floors are not judged there.
 
 Open finding, 2026-09-23 (run r3t04; hoprd 4.1.3 from the hoprd-4arb tree with its inert env-toggle patch,
-client 0.96.3-a974f5fc glibc image, server 0.7.0): two of three 50 MiB downloads ran at 10-19 Mbit/s for
+client 0.96.3-a974f5fc glibc image, server 0.7.0; reproduced on 2026-09-24 in r3b3 and, on the upstream
+Alpine/Nix images of the same commits, in up2): two of three 50 MiB downloads ran at 10-19 Mbit/s for
 17-23 s (25-30 MB), hit a burst of frame discards (355 and 163 in ten seconds), then delivered nothing until the
 90 s cap; five tunnel-ping timeouts and one reconnect followed, and the third completed on the fresh session.
 1 and 10 MiB and every 50 MiB upload bar the one on the dead session completed; the exit and relays logged
