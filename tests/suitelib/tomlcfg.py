@@ -11,7 +11,8 @@ def _blocks(lines):
 
 def set_section(path, header, *body):
     """Replace the section with this header (or append it) by header + body lines."""
-    lines = open(path).read().split("\n")
+    with open(path) as fh:
+        lines = fh.read().split("\n")
     new = [header, *body, ""]
     for a, b in _blocks(lines):
         if lines[a].strip() == header:
@@ -19,21 +20,25 @@ def set_section(path, header, *body):
             break
     else:
         lines += ["", *new]
-    open(path, "w").write("\n".join(lines))
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines))
 
 
 def del_section(path, header):
-    lines = open(path).read().split("\n")
+    with open(path) as fh:
+        lines = fh.read().split("\n")
     for a, b in _blocks(lines):
         if lines[a].strip() == header:
             del lines[a:b]
             break
-    open(path, "w").write("\n".join(lines))
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines))
 
 
 def keep_destinations(path, n):
     """Keep only the first n [destinations.*] blocks."""
-    lines = open(path).read().split("\n")
+    with open(path) as fh:
+        lines = fh.read().split("\n")
     seen = 0
     cut = set()
     for a, b in _blocks(lines):
@@ -41,13 +46,16 @@ def keep_destinations(path, n):
             seen += 1
             if seen > n:
                 cut.update(range(a, b))
-    open(path, "w").write("\n".join(l for i, l in enumerate(lines) if i not in cut))
+    with open(path, "w") as fh:
+        fh.write("\n".join(l for i, l in enumerate(lines) if i not in cut))
 
 
 def section_value(path, header, key):
     """The value of key inside the section, or None."""
     inside = False
-    for line in open(path):
+    with open(path) as fh:
+        lines = fh.read().split("\n")
+    for line in lines:
         s = line.strip()
         if s.startswith("["):
             inside = s == header

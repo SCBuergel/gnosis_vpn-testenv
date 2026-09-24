@@ -129,11 +129,17 @@ def pytest_configure(config):
     config._suite = state
     if getattr(config.option, "help", False) or getattr(config.option, "version", False) or config.option.collectonly:
         return
-    # a junit.xml next to the other results, for CI and dashboards; the run directory is settled at collection
-    if not config.option.xmlpath and any(_is_live_arg(a) for a in config.args):
+    if any(_is_live_arg(a) for a in config.args):
         state.run_id = config.getoption("--run-id") or os.environ.get("SUITE_RUN_ID") \
             or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + (f"-{cfg.cell}" if cfg.cell else "")
-        config.option.xmlpath = str(cfg.out_dir / state.run_id / "junit.xml")
+        # a reused run id is refused here, before the junit path below is set: a refused launch must leave nothing
+        # behind in the directory it was refused from (an it6a launch once left a zero-test junit.xml there)
+        vfile = cfg.out_dir / state.run_id / "verdicts.jsonl"
+        if vfile.exists() and vfile.stat().st_size > 0:
+            raise pytest.UsageError(f"run id '{state.run_id}' already holds results in {vfile.parent}; choose another --run-id or move that directory")
+        # a junit.xml next to the other results, for CI and dashboards; the run directory is settled at collection
+        if not config.option.xmlpath:
+            config.option.xmlpath = str(cfg.out_dir / state.run_id / "junit.xml")
     # the terminal reporter grabs sys.stdout right after this hook; the console log file is attached once the
     # run directory exists (pytest_collection_finish), so everything from the first test line on lands in it
     sys.stdout, sys.stderr = state.tee_out, state.tee_err

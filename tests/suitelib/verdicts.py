@@ -60,21 +60,24 @@ class RunDir:
                                 "status": status, "kind": kind, "msg": msg}) + "\n")
 
     def verdicts(self):
-        return [json.loads(l) for l in open(self.verdicts_file) if l.strip()]
+        with open(self.verdicts_file) as fh:
+            return [json.loads(l) for l in fh if l.strip()]
 
     def rows(self, test=None):
         out = []
-        for l in open(self.rows_file):
-            if not l.strip():
-                continue
-            r = json.loads(l)
-            if test is None or r.get("test") == test:
-                out.append(r)
+        with open(self.rows_file) as fh:
+            for l in fh:
+                if not l.strip():
+                    continue
+                r = json.loads(l)
+                if test is None or r.get("test") == test:
+                    out.append(r)
         return out
 
     def read_json(self, name, default=None):
         try:
-            return json.load(open(self.path / name))
+            with open(self.path / name) as fh:
+                return json.load(fh)
         except (FileNotFoundError, ValueError):
             return default
 
