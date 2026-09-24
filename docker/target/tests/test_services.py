@@ -33,7 +33,8 @@ def http_port():
 
 
 def _get(port, path, timeout=10):
-    return urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout).read()
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout) as resp:
+        return resp.read()
 
 
 def test_speedtarget_health_down_up(http_port):
@@ -42,16 +43,16 @@ def test_speedtarget_health_down_up(http_port):
     assert len(body) == 3000000 and len(set(body[:4096])) > 200      # sized, and not compressible zeros
     req = urllib.request.Request(f"http://127.0.0.1:{http_port}/up", data=b"z" * 500000, method="POST",
                                  headers={"Content-Type": "application/octet-stream"})
-    assert json.loads(urllib.request.urlopen(req, timeout=10).read())["received"] == 500000
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert json.loads(resp.read())["received"] == 500000
 
 
 def test_speedtarget_sizes_default_and_cap(http_port):
     assert len(_get(http_port, "/down")) == 25000000
     assert len(_get(http_port, "/down?bytes=0")) == 0
     assert len(_get(http_port, "/down?bytes=x")) == 25000000            # unparsable size falls back to the default
-    big = urllib.request.urlopen(f"http://127.0.0.1:{http_port}/down?bytes=999999999999", timeout=10)
-    assert int(big.headers["Content-Length"]) == speedtarget.MAXB
-    big.close()
+    with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/down?bytes=999999999999", timeout=10) as big:
+        assert int(big.headers["Content-Length"]) == speedtarget.MAXB
 
 
 def test_speedtarget_content_follows_the_seed(http_port):
@@ -66,7 +67,8 @@ def test_speedtarget_content_follows_the_seed(http_port):
 def test_speedtarget_unknown_paths_404(http_port):
     for method, path in (("GET", "/nope"), ("POST", "/down")):
         with pytest.raises(urllib.error.HTTPError) as e:
-            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{http_port}{path}", data=b"" if method == "POST" else None, method=method), timeout=5)
+            with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{http_port}{path}", data=b"" if method == "POST" else None, method=method), timeout=5):
+                pass
         assert e.value.code == 404
 
 

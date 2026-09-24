@@ -21,7 +21,8 @@ def rundir(tmp_path):
 
 
 def last_verdict(rundir):
-    return json.loads(open(rundir.verdicts_file).read().splitlines()[-1])
+    with open(rundir.verdicts_file) as fh:
+        return json.loads(fh.read().splitlines()[-1])
 
 
 def test_stats_median_and_stdev():

@@ -27,6 +27,11 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--local-port", type=int, default=0, help="fixed local port (0 = pick once, then keep it across rebinds)")
 ap.add_argument("--dump", default=None, help="dl mode: write seq,delay_ms per packet")
 a = ap.parse_args()
+# the arguments are divisors and packet sizes: refuse what would divide by zero or not fit the 20-byte header
+if a.rate_mbit <= 0 or a.duration <= 0:
+    ap.error("--rate-mbit and --duration must be positive")
+if a.size < 21:
+    ap.error("--size must be at least 21 bytes (20-byte header plus payload)")
 dst = (a.host, a.port)
 sid = random.getrandbits(32)
 pps = a.rate_mbit * 1e6 / 8 / a.size

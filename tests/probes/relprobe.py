@@ -27,6 +27,11 @@ ap.add_argument("--local-port", type=int, default=0, help="fixed local port (0 =
 ap.add_argument("--out", required=True)
 ap.add_argument("--grace", type=float, default=5.0, help="seconds to keep receiving after the last send (echoes still in flight)")
 a = ap.parse_args()
+# the arguments are divisors and packet sizes: refuse what would divide by zero or not fit the 12-byte header
+if a.rate_mbit <= 0 or a.duration <= 0:
+    ap.error("--rate-mbit and --duration must be positive")
+if a.size < 13:
+    ap.error("--size must be at least 13 bytes (12-byte header plus payload)")
 dst = (a.host, a.port)
 pps = a.rate_mbit * 1e6 / 8 / a.size
 pad = b"x" * (a.size - 12)

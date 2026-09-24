@@ -33,6 +33,11 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--rejoin-delay", type=float, default=0.0, help="after a rebind, stay silent this long before sending again")
 ap.add_argument("--idle-pause", action="store_true", help="ask the server to pause its stream while we are silent")
 a = ap.parse_args()
+# the rates are pacing divisors and the sizes must hold the 4-byte tag plus the 17-byte header
+if a.video_pps <= 0 or a.audio_pps <= 0 or a.duration <= 0:
+    ap.error("--video-pps, --audio-pps and --duration must be positive")
+if a.video_size < 22 or a.audio_size < 22:
+    ap.error("--video-size and --audio-size must be at least 22 bytes (4-byte tag, 17-byte header, payload)")
 
 HDR = struct.Struct("!IIBd")
 CALS = struct.Struct("!IffIfI")

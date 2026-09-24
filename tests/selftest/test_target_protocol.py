@@ -100,3 +100,18 @@ def test_unbound_socket_when_iface_empty():
     assert ts.summary()["rebinds"] == 0 and ts.summary()["outages"] == []
     assert probelib.pct_ms([0.1, 0.2, 0.3], 0.5) == 200.0 and probelib.over_min([0.3, 0.1]) == pytest.approx([0.2, 0.0])
     assert probelib.stall_stats([(1.0, 6.0), (2.0, 1.5)])["stalls_gt_5s"] == 1
+
+
+def test_probes_reject_sizes_and_rates_that_cannot_run(tmp_path):
+    """A --size below the header or a zero rate is refused at the arguments (exit 2), not a ZeroDivisionError later."""
+    bad = [("relprobe", dict(host="127.0.0.1", rate_mbit=1, duration=1, size=5)),
+           ("relprobe", dict(host="127.0.0.1", rate_mbit=0, duration=1)),
+           ("streamprobe", dict(mode="ul", host="127.0.0.1", rate_mbit=1, duration=1, size=20)),
+           ("callprobe", dict(host="127.0.0.1", sid=1, duration=1, video_pps=0)),
+           ("callprobe", dict(host="127.0.0.1", sid=1, duration=1, audio_size=10))]
+    for name, args in bad:
+        cmd = [sys.executable, str(PROBES / f"{name}.py"), "--out", str(tmp_path / "x"), "--iface", ""]
+        for k, v in args.items():
+            cmd += [f"--{k.replace('_', '-')}", str(v)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 2 and "must be" in r.stderr, (name, args, r.returncode, r.stderr[-200:])
