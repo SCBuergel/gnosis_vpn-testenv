@@ -10,8 +10,10 @@ ap.add_argument("--containers", default="")
 ap.add_argument("--interval", type=float, default=1.0)
 ap.add_argument("--out", required=True)
 a = ap.parse_args()
-pids = [p for p in a.pids.split(",") if p]
-urls = [u for u in a.urls.split(",") if u]
+# pids and urls are positional, one slot per cluster node: an empty slot (a node without a pid or api url) is kept
+# so node<i> and nodes[i] always mean cluster node i; a missing value samples as nothing, never as the next node
+pids = a.pids.split(",") if a.pids else []
+urls = a.urls.split(",") if a.urls else []
 containers = [c for c in a.containers.split(",") if c]
 KEYS = ("hopr_packets_count", "hopr_mixer_queue_size", "hopr_mixer_averaged_delay", "hopr_session_surb_buffer_estimate",
         "hopr_session_surb_target_buffer", "hopr_packet_rejected_count", "hopr_egress_ring_buffer_dropped",
@@ -19,6 +21,8 @@ KEYS = ("hopr_packets_count", "hopr_mixer_queue_size", "hopr_mixer_averaged_dela
         "hopr_surb_balancer_surbs_rate")
 CLK = os.sysconf("SC_CLK_TCK")
 def pid_ticks(pid):
+    if not pid or not pid.isdigit():
+        return None
     try:
         with open(f"/proc/{pid}/stat") as fh:
             f = fh.read().rsplit(")", 1)[1].split()
@@ -43,6 +47,8 @@ def cgroup_usage(name):
     return None
 def scrape(url):
     out = {}
+    if not url:
+        return out
     try:
         with urllib.request.urlopen(url + "/metrics", timeout=2) as resp:
             txt = resp.read().decode()

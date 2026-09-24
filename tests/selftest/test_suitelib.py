@@ -199,3 +199,23 @@ def test_t06_check_arm_counts_stalls_over_stall_max(rundir):
     c = Checks(rundir, "T06-realtime-udp", "gate")
     check_arm(c, Knobs(dict(SIZE=1200, SAMPLE_MIN_PCT=80, LOSS_MAX=5, STALL_MAX=7)), "echo", 1.5, 15, report, errors)
     assert last_verdict(rundir)["status"] == "PASS"
+
+
+def test_node_sampler_keeps_empty_slots_positional(tmp_path):
+    """An empty pid or url slot keeps its index: node1 is still node1 when node0 has no pid and no url."""
+    import os
+    import subprocess
+    import time
+    out = tmp_path / "s.jsonl"
+    p = subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent.parent / "node-sampler.py"),
+                          "--pids", f",{os.getpid()}", "--urls", ",http://127.0.0.1:9", "--interval", "0.2", "--out", str(out)])
+    try:
+        time.sleep(1.5)
+    finally:
+        p.terminate()
+        p.wait(timeout=10)
+    rows = [json.loads(l) for l in out.read_text().splitlines() if l.strip()]
+    assert rows, "no samples written"
+    for r in rows:
+        assert len(r["nodes"]) == 2 and r["nodes"][0] == {}          # node0: empty url, empty sample, slot kept
+        assert "node0" not in r["cpu_pct"] and "node1" in r["cpu_pct"]  # node1's cpu stays under node1
