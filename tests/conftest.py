@@ -215,7 +215,7 @@ def pytest_collection_finish(session):
         latest.symlink_to(state.run.path)
     except OSError:
         pass
-    f = open(state.run / "console.log", "a")
+    f = open(state.run / "console.log", "a")      # deliberately long-lived: the console tee for the whole run, closed at session end  # noqa: SIM115
     state.tee_out.file = f
     state.tee_err.file = f
     state.started = time.time()

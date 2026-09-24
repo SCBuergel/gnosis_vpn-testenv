@@ -54,7 +54,8 @@ def main(argv):
     extra = [a for a in rest if a != "--reverse"]
     out = Path(os.environ.get("SUITE_OUT_DIR", "/tmp/gnosis_vpn-testenv-suite"))
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    lines = [l.strip() for l in open(cells_file) if l.strip() and not l.strip().startswith("#")]
+    with open(cells_file) as fh:
+        lines = [l.strip() for l in fh if l.strip() and not l.strip().startswith("#")]
     if reverse:
         lines.reverse()
     fail = 0
@@ -93,10 +94,11 @@ def main(argv):
     rows = []
     for d in sorted(glob.glob(f"{out}/{stamp}-*")):
         try:
-            for l in open(f"{d}/verdicts.jsonl"):
-                if l.strip():
-                    v = json.loads(l)
-                    rows.append([v.get("cell"), v["test"], v["status"], v["msg"]])
+            with open(f"{d}/verdicts.jsonl") as fh:
+                for l in fh:
+                    if l.strip():
+                        v = json.loads(l)
+                        rows.append([v.get("cell"), v["test"], v["status"], v["msg"]])
         except FileNotFoundError:
             pass
     with open(out / f"matrix-{stamp}.csv", "w", newline="") as f:

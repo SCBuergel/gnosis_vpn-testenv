@@ -334,7 +334,8 @@ class Client:
             with open(self.run / "logs" / f"restart-not-ready-{ts}.log", "w") as f:
                 f.write("== status\n" + self.status_text() + "\n== config\n")
                 try:
-                    f.write(open(self.cfg.config_dir / "client.toml").read())
+                    with open(self.cfg.config_dir / "client.toml") as cf:
+                        f.write(cf.read())
                 except OSError:
                     pass
                 f.write("\n== log (last 12 min)\n" + shell.run(["docker", "logs", "--since", "12m", self.name], timeout=120).stdout)
@@ -402,7 +403,8 @@ class Client:
         """Longest run of zero-progress seconds in a persec CSV (rx or tx)."""
         col = 1 if direction == "rx" else 2
         try:
-            rows = [l.strip().split(",") for l in open(self.run / f"persec-{name}.csv") if l.strip()]
+            with open(self.run / f"persec-{name}.csv") as fh:
+                rows = [l.strip().split(",") for l in fh if l.strip()]
         except FileNotFoundError:
             return 0
         prev, run, best = None, 0, 0

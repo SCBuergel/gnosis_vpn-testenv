@@ -36,7 +36,8 @@ def serve(port, logdir="/root/callsrv", sock=None):
     def session(sid, addr):
         st = sessions.get(sid)
         if st is None:
-            st = {"addr": addr, "log": open(os.path.join(logdir, "%d.csv" % sid), "a", buffering=1 << 16),
+            # the per-session packet log is deliberately long-lived: written per packet, closed when the session ends
+            st = {"addr": addr, "log": open(os.path.join(logdir, "%d.csv" % sid), "a", buffering=1 << 16),   # noqa: SIM115
                   "recv": [0, 0], "sent": [0, 0], "started": False, "last_up": time.time(), "first_up": time.time()}
             sessions[sid] = st
         st["addr"] = addr

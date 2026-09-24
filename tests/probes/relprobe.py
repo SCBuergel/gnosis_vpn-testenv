@@ -114,5 +114,6 @@ with lock:
         for sec in range(int(start), int(end) + 1):
             n, rl = st["persec"].get(sec, [0, []])
             f.write("%d,%d,%s,%s\n" % (sec, n, round(statistics.median(rl) * 1000, 1) if rl else "", round(max(rl) * 1000, 1) if rl else ""))
-json.dump(summ, open(a.out + ".json", "w"), indent=1)
+with open(a.out + ".json", "w") as fh:
+    json.dump(summ, fh, indent=1)
 print(json.dumps(summ))

@@ -56,7 +56,8 @@ def analyse(rows, client_csv):
             ccpu.setdefault(kk, []).append(v)
     res["container_cpu_mean"] = {kk: round(st.mean(v), 1) for kk, v in ccpu.items()}
     try:
-        cl = [l.strip().split(",") for l in open(client_csv) if l.strip()]
+        with open(client_csv) as fh:
+            cl = [l.strip().split(",") for l in fh if l.strip()]
         pts = []
         for a, b in zip(cl, cl[1:]):
             try:
@@ -94,7 +95,8 @@ def test_metric_sampling(cfg, run, client, cluster, target, checks, knobs):
         rows = sampler.rows()
     an = analyse(rows, run / "t16-client.csv")
     try:
-        hc = sum(1 for l in open(cluster.log_file(0), errors="replace") if "got new session request" in l)
+        with open(cluster.log_file(0), errors="replace") as fh:
+            hc = sum(1 for l in fh if "got new session request" in l)
     except OSError:
         hc = 0
     checks.row(kind="summary", download=r, upload=u, analysis=an, exit_session_requests_total=hc, destinations=len(client.destinations()))

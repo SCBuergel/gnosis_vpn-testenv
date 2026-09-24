@@ -99,10 +99,12 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
         checks.failed(f"client holds no outgoing channel after {k.CLIENT_CHANNEL_TIMEOUT}s")
     # effective config vs shipped defaults: record the diff, never trust the file alone
     cfg_file = cfg.config_dir / "client.toml"
-    effective = open(cfg_file).read()
+    with open(cfg_file) as fh:
+        effective = fh.read()
     (run / "client.toml.effective").write_text(effective)
     try:
-        defaults = open(run / "client.toml.defaults").read()
+        with open(run / "client.toml.defaults") as fh:
+            defaults = fh.read()
         norm = lambda s: sorted(re.sub(r"\s+", "", l) for l in s.splitlines())   # noqa: E731
         a, b = norm(effective), norm(defaults)
         diff_lines = len(set(a) ^ set(b))

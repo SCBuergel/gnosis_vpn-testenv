@@ -37,7 +37,7 @@ a = ap.parse_args()
 HDR = struct.Struct("!IIBd")
 CALS = struct.Struct("!IffIfI")
 dst = (a.host, a.port)
-log = open(a.out + ".csv", "w", buffering=1 << 16)
+log = open(a.out + ".csv", "w", buffering=1 << 16)      # deliberately long-lived: the per-packet log for the whole probe run, closed at the end  # noqa: SIM115
 loglock = threading.Lock()
 state = {"sent": [0, 0], "send_failed": [0, 0], "recv": [0, 0], "dup": [0, 0], "delay": [[], []], "last_recv": None, "gaps": [],
          "seen": [set(), set()], "started": False, "hold_until": 0.0}
@@ -177,5 +177,6 @@ if rep:
                            "audio": round(100 * (1 - rep["recv_audio"] / max(1, state["sent"][1])), 2)}
     summ["down_loss_pct"] = {"video": round(100 * (1 - state["recv"][0] / max(1, rep["sent_video"])), 2),
                              "audio": round(100 * (1 - state["recv"][1] / max(1, rep["sent_audio"])), 2)}
-json.dump(summ, open(a.out + ".json", "w"), indent=1)
+with open(a.out + ".json", "w") as fh:
+    json.dump(summ, fh, indent=1)
 print(json.dumps(summ))

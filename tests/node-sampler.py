@@ -20,7 +20,8 @@ KEYS = ("hopr_packets_count", "hopr_mixer_queue_size", "hopr_mixer_averaged_dela
 CLK = os.sysconf("SC_CLK_TCK")
 def pid_ticks(pid):
     try:
-        f = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
+        with open(f"/proc/{pid}/stat") as fh:
+            f = fh.read().rsplit(")", 1)[1].split()
         return int(f[11]) + int(f[12])
     except Exception:
         return None
@@ -43,7 +44,8 @@ def cgroup_usage(name):
 def scrape(url):
     out = {}
     try:
-        txt = urllib.request.urlopen(url + "/metrics", timeout=2).read().decode()
+        with urllib.request.urlopen(url + "/metrics", timeout=2) as resp:
+            txt = resp.read().decode()
         for line in txt.splitlines():
             if line.startswith("#"): continue
             for k in KEYS:

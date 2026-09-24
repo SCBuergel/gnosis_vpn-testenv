@@ -66,7 +66,8 @@ def test_build_provenance(cfg, run, client, checks, knobs):
          "localcluster_version": lcv[0] if lcv else "", "cluster_env": cfg.cluster_env, "cluster_latency": cfg.cluster_latency,
          "hoprd_bin": cfg.hoprd_bin, "client_image_tag": cfg.client_image, "cell": cfg.cell,
          "t": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    json.dump(d, open(run / "provenance.json", "w"), indent=1)
+    with open(run / "provenance.json", "w") as fh:
+        json.dump(d, fh, indent=1)
     print(json.dumps(d))
     checks.row(client=cv, client_protocol=cp, hoprd=hv, hoprd_protocol=hp, server=sv, server_protocol=sp)
     # a mismatch is the incompatibility this gate exists for; an unreadable id is a WARN because it cannot be judged

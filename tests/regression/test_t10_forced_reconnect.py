@@ -32,12 +32,13 @@ TIMEOUT = lambda k: 2 * k.REPEATS * (k.DUR + 400)   # seconds; the harness fails
 def recovery_s(csv_path, t_kill):
     """Seconds from the kill to the first downstream packet more than 2 s after it, or None."""
     try:
-        for line in open(csv_path):
-            p = line.strip().split(",")
-            if p[0] == "R":
-                t = float(p[-1])
-                if t > t_kill + 2:
-                    return round(t - t_kill, 1)
+        with open(csv_path) as fh:
+            for line in fh:
+                p = line.strip().split(",")
+                if p[0] == "R":
+                    t = float(p[-1])
+                    if t > t_kill + 2:
+                        return round(t - t_kill, 1)
     except (FileNotFoundError, ValueError):
         pass
     return None

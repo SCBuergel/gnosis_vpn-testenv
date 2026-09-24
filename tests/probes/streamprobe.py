@@ -115,7 +115,8 @@ else:
         gaps.append((round(last, 3), round(send_end - last, 3)))
     dn = probelib.over_min(delays)
     if a.dump:
-        open(a.dump, "w").write("".join("%d,%.1f\n" % (i, x * 1000) for i, x in enumerate(dn)))
+        with open(a.dump, "w") as fh:
+            fh.write("".join("%d,%.1f\n" % (i, x * 1000) for i, x in enumerate(dn)))
     summ.update({"sent": sent_total, "recv": recv, "duration_s": round(time.time() - start, 1),
                  "loss_pct": round(100 * (1 - recv / max(1, sent_total)), 2), "delay_over_min_ms": probelib.quantiles_ms(dn),
                  "delayed_pkts_gt_1s": sum(1 for x in dn if x > 1.0)})
@@ -129,5 +130,6 @@ if a.mode == "ul":
     rb["outages"], rb["outage_total_s"] = [], None
 summ.update(rb)
 summ["end"] = time.time()
-json.dump(summ, open(a.out, "w"), indent=1)
+with open(a.out, "w") as fh:
+    json.dump(summ, fh, indent=1)
 print(json.dumps(summ))

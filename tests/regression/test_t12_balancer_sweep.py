@@ -40,7 +40,8 @@ def test_balancer_sweep(cfg, run, client, cluster, target, checks, knobs):
 
     def exit_target():
         try:
-            lines = [l for l in open(cluster.log_file(0), errors="replace") if "spawning exit SURB balancer" in l]
+            with open(cluster.log_file(0), errors="replace") as fh:
+                lines = [l for l in fh if "spawning exit SURB balancer" in l]
         except OSError:
             return ""
         m = re.search(r"target_surb_buffer_size: [0-9]+", lines[-1]) if lines else None
