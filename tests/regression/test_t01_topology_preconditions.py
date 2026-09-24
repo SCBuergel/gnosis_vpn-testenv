@@ -1,7 +1,9 @@
 """T01-topology-preconditions (gate): is the stack in the state every later test assumes? Reads the localcluster
 status and every node's channel set, opens a 1-hop UDP session from the exit through each relay, waits for the
 client worker, for DEST to be Ready and for the client's own outgoing channel, checks both liveness-ping targets
-against the server's wggvpn addresses, and looks for leftover netem qdiscs and suite timers on the host. Every
+against the server's wggvpn addresses, checks that the traffic target is running and answers /health from the host
+(it runs with --rm and no restart policy, so a dead one is a missing container; an external --no-cluster target the
+host cannot reach is a WARN), and looks for leftover netem qdiscs and suite timers on the host. Every
 running client container (up to sixteen, not only those the selection will touch) must have its tools sidecar: a
 client without one is a mis-started stack; with --no-cluster it is a WARN. The effective client config is recorded
 against the shipped defaults, not asserted. A FAIL aborts the run: a number
@@ -21,8 +23,10 @@ target makes every session reconnect every ~85 s; two full runs were read as a l
 Not checked: channel balance, foreign peers on the exit, identity double-runs, announced addresses."""
 import re
 import time
+import urllib.request
 
 from suitelib.client import clients_running
+from suitelib.target import Target
 from suitelib import shell
 
 TEST = "T01-topology-preconditions"
@@ -66,6 +70,18 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
             else:
                 checks.failed(f"1-hop session node0->(relay)->node{j} failed after {dt} ms: {str(r)[:160]}")
             checks.row(check="forwarding_probe", dest_node=j, ms=dt, ok=ok)
+    # the traffic target must be up AND answering: a target whose process died is a missing container (it runs with
+    # --rm and no restart policy) and a stuck one answers nothing, and either would read as a stack defect later
+    tgt = Target(cfg)
+    if not tgt.running():
+        checks.failed(f"traffic target {cfg.target_name} not running (just target-start)")
+    else:
+        try:
+            with urllib.request.urlopen(f"http://{tgt.ip_direct}:{Target.http_port}/health", timeout=5) as resp:
+                body = resp.read(16)
+            (checks.passed if body.startswith(b"ok") else checks.failed)(f"traffic target answers /health at {tgt.ip_direct}: {body[:16]!r}")
+        except OSError as e:
+            (checks.warn if tgt.external else checks.failed)(f"traffic target {tgt.ip_direct} does not answer /health from the host: {e}")
     # client side: every client container the run will use needs its tools sidecar (curl, ping, ip, the probes run
     # there; the upstream client image has none of them, and a run without the sidecar reads zero bytes, no error)
     for c in clients_running(cfg, run):

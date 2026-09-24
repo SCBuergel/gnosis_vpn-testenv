@@ -96,6 +96,12 @@ class TunnelSocket:
                 self.ifindex = None
                 continue
             self.event("IFUP" if self.ifindex is None else "IFCHANGE", str(idx))
+            # The new socket is bound on the same port BEFORE the old one is closed, on purpose: if the bind fails the
+            # probe keeps the old socket and retries on the next tick instead of being left with none. The two do not
+            # conflict even without SO_REUSEADDR: SO_BINDTODEVICE resolves the name to an ifindex at setsockopt time,
+            # the old socket holds the removed interface's index and the new one the recreated interface's, and the
+            # kernel only treats sockets on the same device as a bind conflict (T10-forced-reconnect measures exactly
+            # this rebind, reuse=False, "rebinds 1" and a 70-80 s recovery on every run).
             try:
                 new = make_socket(self.iface, self.port, self.timeout, self.reuse)
             except OSError as e:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run the four target services in one process; exit when any of them dies so the container restarts cleanly.
+"""Run the four target services in one process; exit when any of them stops, so a dead service is a missing
+container (no restart policy) that T01-topology-preconditions catches, never a target that answers some ports.
 The services are plain modules (callecho, streamsrv, callsrv, speedtarget) that the suite's self-tests also start
 on loopback without a container; the container exists only to place them on the far side of the exit."""
 import os
@@ -24,10 +25,16 @@ def main():
     died = threading.Event()
 
     def run(name, fn):
+        # A service is a serve-forever loop, so its function returning is as final as it raising: either way that
+        # port has stopped answering and the container must exit. It runs with --rm and no restart policy, so the
+        # exit shows as a missing container, and T01-topology-preconditions refuses to measure without a target
+        # that answers /health. Only the message differs.
         try:
             fn()
         except BaseException as e:   # noqa: BLE001 - any exit of a service ends the container
             print(f"{name} died: {e!r}", flush=True)
+        else:
+            print(f"{name} returned: a service that stops serving is a dead service", flush=True)
         died.set()
 
     for name, fn in SERVICES.items():
