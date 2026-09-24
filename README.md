@@ -118,8 +118,9 @@ What the suite added to the stack (each is a justfile variable with the old beha
 | `LOG_MAX_SIZE`, `LOG_MAX_FILE` | bounded container logs for every container (soak safety) |
 | `HOPS0_ALSO` | also generate 0-hop `node-N-h0` destinations (T30-hopcount-ab) |
 | `TARGET_IMAGE`, `TARGET_NAME` | the in-cluster traffic target (`just target-start`): sized HTTP download/upload, UDP echo, one-way stream server, two-way call server |
+| `TOOLS_IMAGE` | the suite's tools sidecar (`<client>-tools`, started with each client in its network namespace): curl, ping, iproute2, python for the probes, so the client image stays vanilla |
 
-New recipes: `nightly`, `build-target`, `target-test`, `target-start`/`target-stop`, `client2-start`/`client2-stop`, `up-nobuild`, `cluster-restart`, `test`, `suite`, `suite-selftest`, `matrix`. `gen-config` now saves every extra identity as `extra_id_<i>.*` (keeping `extra_id.*` for the client).
+New recipes: `nightly`, `build-target`, `target-test`, `build-tools`, `target-start`/`target-stop`, `client2-start`/`client2-stop`, `up-nobuild`, `cluster-restart`, `test`, `suite`, `suite-selftest`, `matrix`. `gen-config` now saves every extra identity as `extra_id_<i>.*` (keeping `extra_id.*` for the client).
 
 ## Connectivity smoke-test / drain-tour / traffic scripts
 

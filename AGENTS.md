@@ -48,7 +48,7 @@ Read before changing `scripts/suite/`. Each rule is one line: what to do, then w
 
 - hoprd 4.1.x: branch `release/4.1` (tag `v4.1.2` is on the 5.0 line and its localcluster writes a config 4.x rejects); 4.0.3: tag `v4.0.3`. Build the localcluster from the same tree as the hoprd binary.
 - `HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64` is a no-op from `release/4.1 @ 60269a3` (it worked around hoprnet #8246 before); a run with it is not a different configuration. The #8425 pool arbiter has no config surface and made no difference in an A/B (6/6 vs 6/6).
-- Client: `release/hoprdv4` is the 4.x line, `main` the 0.101/5.x line. The suite runs the upstream images (`just build-client`, `just build-server`), the configuration that ships; a cargo build in a different image is not release evidence.
+- Client: `release/hoprdv4` is the 4.x line, `main` the 0.101/5.x line. The suite runs the upstream images (`just build-client`, `just build-server`), the configuration that ships; a cargo build in a different image is not release evidence. Nothing the suite needs may be added to the client image: curl, ping, ip and the Python probes run in the tools sidecar `<client>-tools` (`just _tools-start`, `docker/suite-tools`), which shares the client's network namespace; only `gnosis_vpn-ctl`, the log and `/proc` of the worker are read from the client container. The first upstream-image run (2026-09-24) read zero bytes on every transfer because the Alpine image has neither curl nor python3.
 - The client routes RFC1918 around the tunnel, so the target lives on `198.18.0.0/24` behind an exit-side MASQUERADE; `_client-start` copies the identity into the writable state dir because a newer client migrates its keystore in place.
 
 ## Attribution

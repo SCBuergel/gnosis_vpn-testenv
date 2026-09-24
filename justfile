@@ -61,6 +61,8 @@ HOPS0_ALSO := env_var_or_default("HOPS0_ALSO", "0")
 # tunnel, so a target on Docker's 172.17/16 bridge would be routed around the exit. 198.18.0.0/15 is the
 # RFC 2544 benchmarking range; every exit server is attached to this network and NATs into it.
 TARGET_IMAGE   := env_var_or_default("TARGET_IMAGE", "gnosis_vpn-target")
+# Tools sidecar per client (curl, ping, ip, python probes) in the client's network namespace: the client image stays vanilla
+TOOLS_IMAGE    := env_var_or_default("TOOLS_IMAGE", "gnosis_vpn-suite-tools")
 TARGET_NAME    := env_var_or_default("TARGET_NAME", "gnosis_vpn-target")
 TARGET_NETWORK := env_var_or_default("TARGET_NETWORK", "gnosis-vpn-target")
 TARGET_SUBNET  := env_var_or_default("TARGET_SUBNET", "198.18.0.0/24")
@@ -129,6 +131,10 @@ build: build-cluster build-server build-client
 # Build the in-cluster traffic target image (sized HTTP target, UDP echo, stream server, call server)
 build-target:
     docker build -q -t "{{TARGET_IMAGE}}" "{{justfile_directory()}}/docker/target" && echo "built {{TARGET_IMAGE}}"
+
+# Build the suite's tools sidecar image (curl, ping, iproute2, python for the probes); one sidecar runs per client
+build-tools:
+    docker build -q -t "{{TOOLS_IMAGE}}" "{{justfile_directory()}}/docker/suite-tools" && echo "built {{TOOLS_IMAGE}}"
 
 # ─── Networking ──────────────────────────────────────────────────────────────
 
@@ -428,8 +434,6 @@ _client-start name state_dir extra_index:
         "${extra_env[@]}" \
         --volume "{{CONFIG_DIR}}:/config:ro" \
         --volume "{{state_dir}}:/var/lib/gnosisvpn" \
-        --volume "{{justfile_directory()}}/scripts/suite:/suite:ro" \
-        --volume "{{SUITE_OUT_DIR}}:/suite-out" \
         {{CLIENT_IMAGE}} {{CLIENT_EXTRA_ARGS}}
     sleep 1
     running=$(docker inspect "{{name}}" 2>/dev/null | jq -r '.[0].State.Running // "false"')
@@ -439,6 +443,24 @@ _client-start name state_dir extra_index:
         exit 1
     fi
     echo "Started {{name}} ({{CLIENT_IMAGE}}, identity extra_id_{{extra_index}})"
+    just _tools-start "{{name}}"
+
+# The tools sidecar of one client: joins the client's network namespace (tunnel interface, routes, sysctls), carries
+# curl, ping, ip and python for the probes, mounts scripts/suite and the run directory. Removed with the client.
+_tools-start name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker image inspect "{{TOOLS_IMAGE}}" > /dev/null 2>&1 || just build-tools
+    docker rm -f "{{name}}-tools" > /dev/null 2>&1 || true
+    docker run --detach --rm \
+        --name "{{name}}-tools" \
+        --network "container:{{name}}" \
+        --cap-add=NET_ADMIN --cap-add=NET_RAW \
+        --log-opt max-size=10m --log-opt max-file=2 \
+        --volume "{{justfile_directory()}}/scripts/suite:/suite:ro" \
+        --volume "{{SUITE_OUT_DIR}}:/suite-out" \
+        "{{TOOLS_IMAGE}}" > /dev/null
+    echo "Started {{name}}-tools ({{TOOLS_IMAGE}}, network namespace of {{name}})"
 
 # Start the gnosis_vpn-client container
 client-start: network-create
@@ -463,6 +485,7 @@ clients-stop:
     #!/usr/bin/env bash
     for i in $(seq 2 16); do
         name="gnosis_vpn-client-${i}"
+        docker rm -f "${name}-tools" >/dev/null 2>&1 || true
         docker container inspect "${name}" >/dev/null 2>&1 || continue
         docker stop "${name}" >/dev/null 2>&1 || true
         for j in $(seq 1 30); do docker container inspect "${name}" >/dev/null 2>&1 || break; sleep 1; done
@@ -472,6 +495,7 @@ clients-stop:
 # Stop the second client container
 client2-stop:
     #!/usr/bin/env bash
+    docker rm -f gnosis_vpn-client-2-tools >/dev/null 2>&1 || true
     docker stop gnosis_vpn-client-2 2>/dev/null || true
     for i in $(seq 1 30); do docker container inspect gnosis_vpn-client-2 > /dev/null 2>&1 || break; sleep 1; done
     rm -rf "{{CLIENT_STATE_DIR}}-2" 2>/dev/null || sudo rm -rf "{{CLIENT_STATE_DIR}}-2" 2>/dev/null || true
@@ -479,6 +503,7 @@ client2-stop:
 # Stop the client, wherever it's running (container or host-native — used by down)
 client-stop:
     #!/usr/bin/env bash
+    docker rm -f gnosis_vpn-client-tools >/dev/null 2>&1 || true
     docker stop gnosis_vpn-client 2>/dev/null || true
     # --rm removal is asynchronous; wait for it so a following client-start does not see a dying container
     for i in $(seq 1 30); do docker container inspect gnosis_vpn-client > /dev/null 2>&1 || break; sleep 1; done

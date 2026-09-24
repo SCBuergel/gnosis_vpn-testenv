@@ -1,6 +1,6 @@
 # Regression suite
 
-pytest form of [docs/regression-catalogue.md](../../docs/regression-catalogue.md): one `tests/test_tNN_<name>.py` per catalogue test, the library `suitelib/`, the pytest glue `conftest.py`, and a version-matrix driver (`matrix.py`). Everything runs against the live testenv stack through `docker exec gnosis_vpn-client gnosis_vpn-ctl …`, the localcluster's `status` JSON and the nodes' REST/`/metrics` endpoints; traffic goes to the in-cluster target container (`just target-start`). Needs `pytest` (`apt install python3-pytest` or `pip install pytest`); everything else is the standard library.
+pytest form of [docs/regression-catalogue.md](../../docs/regression-catalogue.md): one `tests/test_tNN_<name>.py` per catalogue test, the library `suitelib/`, the pytest glue `conftest.py`, and a version-matrix driver (`matrix.py`). Everything runs against the live testenv stack through `docker exec gnosis_vpn-client gnosis_vpn-ctl …`, the localcluster's `status` JSON and the nodes' REST/`/metrics` endpoints; traffic goes to the in-cluster target container (`just target-start`). curl, ping, `ip` and the probes run in a tools sidecar per client (`gnosis_vpn-client-tools`, image `docker/suite-tools`, started by `just client-start` with `--network container:gnosis_vpn-client`), so the client image stays the upstream one. Needs `pytest` (`apt install python3-pytest` or `pip install pytest`); everything else is the standard library.
 
 ```sh
 just up-nobuild                  # or: just up   — stack + target + clients

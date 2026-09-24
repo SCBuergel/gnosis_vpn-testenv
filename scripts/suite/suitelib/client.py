@@ -106,11 +106,13 @@ class Session:
 class Client:
     """One client container. Run helpers against another client by making another Client(cfg, run, name)."""
 
-    suite_dir = "/suite"   # scripts/suite is mounted read-only at /suite in the container
+    suite_dir = "/suite"   # scripts/suite is mounted read-only at /suite in the tools sidecar
 
     def __init__(self, cfg, run, name=None, index=1):
         self.cfg, self.run = cfg, run
         self.name = name or (cfg.client if index == 1 else f"{cfg.client}-{index}")
+        self.tools = f"{self.name}-tools"    # the sidecar in this client's network namespace (just _tools-start)
+        self._tools_checked = None
         self.index = index
         self.deadman_s = cfg.deadman
         self._deadman = None
@@ -125,17 +127,35 @@ class Client:
     def exists(self):
         return shell.ok(["docker", "container", "inspect", self.name], timeout=30)
 
+    def _shell_target(self):
+        """Where shell commands run: the tools sidecar (curl, ping, ip, python; the client's network namespace), or the
+        client container itself when no sidecar exists (a client started outside `just client-start`), said once."""
+        if self._tools_checked is None:
+            self._tools_checked = shell.ok(["docker", "container", "inspect", self.tools], timeout=30)
+            if not self._tools_checked:
+                log(f"{self.name}: no tools sidecar {self.tools}; running commands in the client container "
+                    f"(the upstream image has no curl or python3: start the client with `just client-start`)")
+        return self.tools if self._tools_checked else self.name
+
     def exec(self, cmd, timeout=shell.DEFAULT_TIMEOUT):
-        """Run a shell command inside the container."""
+        """Run a shell command in the client's network namespace (the tools sidecar)."""
+        return shell.run(["docker", "exec", self._shell_target(), "sh", "-c", cmd], timeout=timeout)
+
+    def exec_client(self, cmd, timeout=shell.DEFAULT_TIMEOUT):
+        """Run a shell command inside the client container itself (its binaries, its process namespace)."""
         return shell.run(["docker", "exec", self.name, "sh", "-c", cmd], timeout=timeout)
 
     def out(self, cmd, timeout=shell.DEFAULT_TIMEOUT, default=""):
         r = self.exec(cmd, timeout=timeout)
         return r.stdout.strip() if r.returncode == 0 else default
 
+    def out_client(self, cmd, timeout=shell.DEFAULT_TIMEOUT, default=""):
+        r = self.exec_client(cmd, timeout=timeout)
+        return r.stdout.strip() if r.returncode == 0 else default
+
     def exec_bg(self, cmd):
-        """Start a shell command inside the container, detached."""
-        return shell.run(["docker", "exec", "-d", self.name, "sh", "-c", cmd], timeout=60)
+        """Start a shell command in the client's network namespace, detached."""
+        return shell.run(["docker", "exec", "-d", self._shell_target(), "sh", "-c", cmd], timeout=60)
 
     def ctl(self, *args, timeout=60):
         r = shell.run(["docker", "exec", self.name, "gnosis_vpn-ctl", *args], timeout=timeout)
@@ -353,7 +373,8 @@ class Client:
         return telemetry_sum(txt, name)
 
     def worker_rss_kb(self):
-        v = self.out("ps -o rss= -C gnosis_vpn-worker | head -1").strip()
+        """The worker's RSS from /proc inside the client container (its pid namespace; busybox ps has no -C)."""
+        v = self.out_client("p=$(pidof gnosis_vpn-worker | cut -d' ' -f1); [ -n \"$p\" ] && awk '/VmRSS/{print $2}' /proc/$p/status").strip()
         return int(v) if v.isdigit() else 0
 
     def log_path_size(self):
@@ -391,7 +412,7 @@ class Client:
             prev = v
         return best
 
-    # -- probes (scripts/suite/probes, run inside the container) ---------------------------------------------
+    # -- probes (scripts/suite/probes, run in the tools sidecar) ---------------------------------------------
     def probe_cmd(self, probe, out, **args):
         parts = [f"python3 {self.suite_dir}/probes/{probe}.py"]
         for k, v in args.items():
@@ -403,14 +424,14 @@ class Client:
         return " ".join(parts)
 
     def probe(self, probe, out, timeout, **args):
-        """Run a probe to completion inside the container; the result JSON lands in the run directory."""
+        """Run a probe to completion in the sidecar; the result JSON lands in the run directory."""
         return self.exec(self.probe_cmd(probe, out, **args) + " >/dev/null 2>&1", timeout=timeout)
 
     def probe_bg(self, probe, out, **args):
         return self.exec_bg(self.probe_cmd(probe, out, **args))
 
     def kill_probes(self):
-        """Stop any probe still running inside the container (after a test timeout the local docker exec dies, the
+        """Stop any probe still running in the sidecar (after a test timeout the local docker exec dies, the
         probe does not); the pattern is anchored so it cannot match its own shell."""
         if self.exists():
             self.exec("pkill -f '^python3 /suite/probes/' 2>/dev/null; true", timeout=30)

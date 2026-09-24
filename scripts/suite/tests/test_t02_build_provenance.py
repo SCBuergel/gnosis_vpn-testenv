@@ -34,11 +34,13 @@ def _sha16(path):
 
 def test_build_provenance(cfg, run, client, checks, knobs):
     cv = client.version()
-    cp = client.out("grep -aoE -m1 '/hopr/mix/[0-9.]+' /app/gnosis_vpn-worker")
+    # the worker binary is streamed out and searched with the host's GNU grep: busybox grep (the upstream Alpine
+    # image) drops a match that follows a NUL byte on the same line, and reads nothing from a static binary
+    cp = shell.out(["sh", "-c", f"docker exec {client.name} cat /app/gnosis_vpn-worker | grep -aoE -m1 '/hopr/mix/[0-9.]+'"], timeout=120)
     hv = (shell.out([cfg.hoprd_bin, "--version"], timeout=30) or "unknown").splitlines()[0]
     hp = shell.out(["grep", "-aoE", "-m1", "/hopr/mix/[0-9.]+", cfg.hoprd_bin], timeout=120)
     sv = (shell.out(["docker", "exec", cfg.server, "./gnosis_vpn-server", "--version"], timeout=30) or "unknown").splitlines()[0]
-    sp = shell.out(["docker", "exec", cfg.server, "sh", "-c", "grep -aoE -m1 '/hopr/mix/[0-9.]+' ./gnosis_vpn-server"], timeout=120)
+    sp = shell.out(["sh", "-c", f"docker exec {cfg.server} cat ./gnosis_vpn-server | grep -aoE -m1 '/hopr/mix/[0-9.]+'"], timeout=120)
     ci = shell.out(["docker", "inspect", "-f", "{{.Config.Image}} {{.Image}}", client.name], timeout=30)
     si = shell.out(["docker", "inspect", "-f", "{{.Config.Image}} {{.Image}}", cfg.server], timeout=30)
     # an image built with --label org.opencontainers.image.revision=<commit> names its source commit here
