@@ -104,6 +104,24 @@ def test_streamsrv_counts_an_upload_and_streams_a_download():
         elif d[:4] == b"DLND":
             end = struct.unpack("!II", d[4:12])[1]
     assert end is not None and 40 <= data <= end <= 60
+    time.sleep(2.5)                                                    # the DLND burst (8 x 0.25 s) ends, the sid is forgotten
+    s.settimeout(0.3)
+    try:
+        while True:
+            s.recv(65535)                                              # drain the rest of that burst
+    except socket.timeout:
+        pass
+    s.settimeout(3)
+    s.sendto(b"CTLD" + struct.pack("!IfII", sid + 1, 50.0, 100, 1), srv)   # the same sid streams again
+    again = 0
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        d = s.recv(65535)
+        if d[:4] == b"DLDA":
+            again += 1
+        elif d[:4] == b"DLND":
+            break
+    assert again >= 40
     s.close()
 
 

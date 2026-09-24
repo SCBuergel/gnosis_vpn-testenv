@@ -31,7 +31,7 @@ Order is load-bearing: T03-repeatability-baseline runs third (the stack's repeat
 
 ## Thresholds
 
-Every number a gate holds a measurement against is absolute and named; nothing is compared with a previous run (delta scoring ratcheted, mixed run modes and once passed a delivery collapse inside a ±279 % band). Calibrated on the reference stack (hoprd 4.1.3 `release/4.1`, client 0.96.3, server 0.7.0, one 8-vCPU host, 2026-09-20; the calibration runs used Ubuntu/glibc cargo builds of the client and server, and the upstream Alpine/Nix images of the same commits read the same T04 medians on 2026-09-24: 11.8 down, 13.0 up at 10 MiB) at full-length durations; a `--very-fast` run reads 20-40 % lower and its threshold verdicts are smoke-level. A run T03-repeatability-baseline flags UNSTABLE makes every threshold verdict weak evidence.
+Every number a gate holds a measurement against is absolute and named; nothing is compared with a previous run (delta scoring ratcheted, mixed run modes and once passed a delivery collapse inside a ±279 % band). Calibrated on the reference stack (hoprd 4.1.3 `release/4.1`, client 0.96.3, server 0.7.0, one 8-vCPU host, 2026-09-20, glibc builds) at full-length durations; the upstream images of the same commits read 11.8 / 13.0 at 10 MiB on 2026-09-24; a `--very-fast` run reads 20-40 % lower and its threshold verdicts are smoke-level. A run T03-repeatability-baseline flags UNSTABLE makes every threshold verdict weak evidence.
 
 | Knob | Default | Used by | Reference stack measured | Why this value |
 | --- | --- | --- | --- | --- |

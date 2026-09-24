@@ -43,6 +43,9 @@ def serve(port, sock=None):
                 pass
             time.sleep(0.25)
         print(f"DL sid={sid} to {dl_addr.get(sid, addr)} sent={n}", flush=True)
+        with lock:                      # the stream is over: forget it, so a long-lived target does not grow per probe
+            dl_started.discard(sid)
+            dl_addr.pop(sid, None)
 
     while True:
         try:

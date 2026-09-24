@@ -24,12 +24,17 @@ def pid_ticks(pid):
         return int(f[11]) + int(f[12])
     except Exception:
         return None
+_cpu_stat = {}     # container name -> its cgroup cpu.stat path; one docker inspect per container, not one per sample
 def cgroup_usage(name):
     try:
-        cid = subprocess.check_output(["docker", "inspect", "-f", "{{.Id}}", name], text=True, timeout=5).strip()
-        for p in (f"/sys/fs/cgroup/system.slice/docker-{cid}.scope/cpu.stat", f"/sys/fs/cgroup/docker/{cid}/cpu.stat"):
-            if os.path.exists(p):
-                for line in open(p):
+        p = _cpu_stat.get(name)
+        if p is None or not os.path.exists(p):      # first use, or the container was recreated with a new id
+            cid = subprocess.check_output(["docker", "inspect", "-f", "{{.Id}}", name], text=True, timeout=5).strip()
+            p = next((c for c in (f"/sys/fs/cgroup/system.slice/docker-{cid}.scope/cpu.stat", f"/sys/fs/cgroup/docker/{cid}/cpu.stat") if os.path.exists(c)), None)
+            _cpu_stat[name] = p
+        if p:
+            with open(p) as fh:
+                for line in fh:
                     if line.startswith("usage_usec"):
                         return int(line.split()[1])
     except Exception:

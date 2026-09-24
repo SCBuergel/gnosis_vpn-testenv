@@ -127,14 +127,19 @@ class Client:
     def exists(self):
         return shell.ok(["docker", "container", "inspect", self.name], timeout=30)
 
+    def tools_exists(self):
+        return shell.ok(["docker", "container", "inspect", self.tools], timeout=30)
+
     def _shell_target(self):
-        """Where shell commands run: the tools sidecar (curl, ping, ip, python; the client's network namespace), or the
-        client container itself when no sidecar exists (a client started outside `just client-start`), said once."""
+        """Where shell commands run: the tools sidecar (curl, ping, ip, python; the client's network namespace).
+        Without one, T01-topology-preconditions fails the run (the upstream client image has no curl or python3, and
+        a run without the sidecar reads zero bytes with no error); the fallback to the client container itself is
+        for --no-cluster runs against a client the suite did not start, and is said once."""
         if self._tools_checked is None:
-            self._tools_checked = shell.ok(["docker", "container", "inspect", self.tools], timeout=30)
+            self._tools_checked = self.tools_exists()
             if not self._tools_checked:
-                log(f"{self.name}: no tools sidecar {self.tools}; running commands in the client container "
-                    f"(the upstream image has no curl or python3: start the client with `just client-start`)")
+                log(f"{self.name}: no tools sidecar {self.tools}; commands run in the client container itself "
+                    f"(only meaningful with --no-cluster against a client with curl and python3)")
         return self.tools if self._tools_checked else self.name
 
     def exec(self, cmd, timeout=shell.DEFAULT_TIMEOUT):

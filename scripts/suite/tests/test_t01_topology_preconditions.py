@@ -20,6 +20,7 @@ Not checked: channel balance, foreign peers on the exit, identity double-runs, a
 import re
 import time
 
+from suitelib.client import clients_running
 from suitelib import shell
 
 TEST = "T01-topology-preconditions"
@@ -62,7 +63,15 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
             else:
                 checks.failed(f"1-hop session node0->(relay)->node{j} failed after {dt} ms: {str(r)[:160]}")
             checks.row(check="forwarding_probe", dest_node=j, ms=dt, ok=ok)
-    # client side
+    # client side: every client container the run will use needs its tools sidecar (curl, ping, ip, the probes run
+    # there; the upstream client image has none of them, and a run without the sidecar reads zero bytes, no error)
+    for c in clients_running(cfg, run):
+        if c.tools_exists():
+            checks.passed(f"{c.name}: tools sidecar {c.tools} running")
+        elif cfg.no_cluster:
+            checks.warn(f"{c.name}: no tools sidecar {c.tools}; commands run in the client container (--no-cluster)")
+        else:
+            checks.failed(f"{c.name}: tools sidecar {c.tools} not running (start the client with `just client-start`)")
     if not client.wait_worker(120):
         checks.failed("client worker offline")
     for d in client.destinations():
