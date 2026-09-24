@@ -34,19 +34,28 @@ def test_knob_ab(cfg, client, target, checks, knobs):
         checks.row(arm=label, knob=k.KNOB, client_knob=k.CLIENT_KNOB, summary=summary_row(summ), errors=e)
         return summ
 
+    def restart_client(extra_env, label):
+        """A checked restart: a failed stop/start or a worker that never comes back abandons the A/B, recorded."""
+        env = {**os.environ, "CLIENT_EXTRA_ENV": extra_env}
+        ok = shell.ok("just client-stop", timeout=120, cwd=cwd) and shell.ok("just client-start", timeout=300, cwd=cwd, env=env)
+        ok = ok and client.wait_worker(180)
+        if not ok:
+            checks.row(kind="summary", result={"abandoned": f"client restart for the {label} arm failed", "client_knob": k.CLIENT_KNOB})
+            checks.record(f"client restart for the {label} arm ({extra_env or 'default env'}) failed; A/B abandoned")
+        return ok
+
     a = cell("baseline")
     if k.CLIENT_KNOB:
-        shell.run("just client-stop", timeout=120, cwd=cwd)
-        shell.run("just client-start", timeout=300, cwd=cwd, env={**os.environ, "CLIENT_EXTRA_ENV": k.CLIENT_KNOB})
+        if not restart_client(k.CLIENT_KNOB, "knob"):
+            return
     else:
         if not shell.ok("just cluster-restart", timeout=1800, cwd=cwd, env={**os.environ, "CLUSTER_ENV": k.KNOB}):
             checks.record(f"cluster restart with {k.KNOB} failed")
             return
-    client.wait_worker(180)
+        client.wait_worker(180)
     b = cell("knob")
     if k.CLIENT_KNOB:
-        shell.run("just client-stop", timeout=120, cwd=cwd)
-        shell.run("just client-start", timeout=300, cwd=cwd)
+        restart_client("", "restore")
     else:
         shell.run("just cluster-restart", timeout=1800, cwd=cwd)
     client.wait_worker(180)

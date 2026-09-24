@@ -2,7 +2,9 @@
 pair (min/median/mean/max/stdev) plus a peer survey from node 0 over its connected table. On one host the medians
 are 2-3 ms and say little; the stdev tail is the signal (STDEV_MAX is declared, not asserted). With
 SUITE_LATENCY_MAP="idx=ms ..." (a cell that injected a latency map) it gates: the node0->idx median must be within
-LATENCY_TOL_MS of ms plus the node0->node1 median, or at least ms, or every rung above it is meaningless.
+LATENCY_TOL_MS of ms plus the node0->node1 median, or at least ms, or every rung above it is meaningless. The
+promotion is `checks.kind = "gate"`, which the harness honours (conftest reads the checks object's kind before the
+module's KIND), so a FAIL here fails the run.
 
 Why: a few hundred pings identified the saturated relay of T01's forwarding probe by its jitter tail before that
 probe existed, and the matrix tells a test author which impairment rungs are realistic."""

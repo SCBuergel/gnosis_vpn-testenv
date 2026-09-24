@@ -1,4 +1,5 @@
-# The traffic target as a tiny project: no runtime dependencies (stdlib only), pytest for its own tests.
+# The traffic target as a tiny project, for its tests: no runtime dependencies (stdlib only), pytest as the dev
+# group, unpackaged (no build system: the image copies the modules, nothing is installed).
 #   uv run --directory docker/target pytest        # or: just target-test
 [project]
 name = "gnosis-vpn-target"
@@ -6,9 +7,6 @@ version = "0.1.0"
 description = "In-cluster traffic target for the gnosis_vpn regression suite: sized HTTP download/upload, UDP echo, paced stream server, two-way call server"
 requires-python = ">=3.12"
 dependencies = []
-
-[project.scripts]
-gnosis-vpn-target = "main:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

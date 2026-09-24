@@ -71,6 +71,7 @@ def _series_summary(down, up):
             "up_median": round(st.median([u["mbit"] for u in up]), 3) if up else 0,
             "down_complete": sum(1 for d in down if d["complete"]),
             "up_complete": sum(1 for u in up if u["complete"]),
+            "stall_max_s": max([x.get("stall_s") or 0 for x in down + up] or [0]),
             "n": len(down)}
 
 
@@ -88,13 +89,15 @@ def transfer_series(checks, client, label, host, reps, nbytes, cap, sizes=None):
             client.persec_start(tag)
             d = dict(curl_down(client, host, n, cap), want=n)
             client.persec_stop()
-            checks.row(label=label, dir="down", rep=r, bytes=n, res=d, stall_s=client.persec_stall(tag, "rx"))
+            d["stall_s"] = client.persec_stall(tag, "rx")
+            checks.row(label=label, dir="down", rep=r, bytes=n, res=d, stall_s=d["stall_s"])
             down.append(d)
             tag = f"{label}-u{i}"
             client.persec_start(tag)
             u = dict(curl_up(client, host, n, cap), want=n)
             client.persec_stop()
-            checks.row(label=label, dir="up", rep=r, bytes=n, res=u, stall_s=client.persec_stall(tag, "tx"))
+            u["stall_s"] = client.persec_stall(tag, "tx")
+            checks.row(label=label, dir="up", rep=r, bytes=n, res=u, stall_s=u["stall_s"])
             up.append(u)
     s = _series_summary(down, up)
     s["reps"] = reps

@@ -43,10 +43,11 @@ def test_congestion_control(cfg, client, target, checks, knobs):
             checks.failed(f"client restart with congestion control '{cc or 'default'}' failed")
         return ok
 
-    def measure():
+    def measure(cc_wanted):
         try:
             s = client.connect(cfg.dest, 15)
-        except ConnectFailed:
+        except ConnectFailed as e:
+            checks.row(cc=cc_wanted, connect_failed=str(e)[:300])      # the evidence for an abandoned or shortened A/B
             return (0.0, 0.0)
         with s:
             cc = client.out("cat /proc/sys/net/ipv4/tcp_congestion_control")
@@ -62,7 +63,7 @@ def test_congestion_control(cfg, client, target, checks, knobs):
                 if not restart_cc(cc):
                     checks.row(kind="summary", result={"abandoned": f"restart with {cc} failed", "cubic_arms": len(a), "bbr_arms": len(b)})
                     return           # no partial pairs; the finally restores the default client and the failure is recorded (WARN: runbook)
-                (a if cc == "cubic" else b).append(measure())
+                (a if cc == "cubic" else b).append(measure(cc))
     finally:
         restart_cc("")       # the default client, whatever happened above
 
@@ -70,7 +71,8 @@ def test_congestion_control(cfg, client, target, checks, knobs):
         ra = [y[idx] / x[idx] for x, y in zip(a, b) if x[idx] > 0 and y[idx] > 0]
         return {"median_ratio_bbr_over_cubic": round(st.median(ra), 3) if ra else None, "bbr_faster": sum(1 for r in ra if r > 1), "n": len(ra)}
 
-    res = {"upload": cmp(1), "download_control": cmp(0), "pairs": min(len(a), len(b))}
+    res = {"upload": cmp(1), "download_control": cmp(0), "pairs_attempted": min(len(a), len(b))}
+    res["pairs"] = res["upload"]["n"]           # valid pairs (both arms measured), the count the ratios are built from
     checks.row(kind="summary", result=res)
     up, dn = res["upload"], res["download_control"]
     if up["n"] == 0:

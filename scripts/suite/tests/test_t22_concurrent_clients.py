@@ -34,7 +34,7 @@ def test_concurrent_clients(cfg, run, clients, target, checks, knobs):
     avail = len(clients)
     if avail < 2:
         checks.skip(f"only {avail} client container(s) running; need at least 2 (CLIENT_COUNT=N + just clients-start)")
-    rungs = [int(n) for n in k.words("LADDER") if int(n) <= avail]
+    rungs = [int(n) for n in k.words("LADDER") if 1 <= int(n) <= avail]     # 0 or a negative rung would build an empty group
     if not rungs:
         checks.skip(f"no ladder rung fits {avail} running client(s)")
 

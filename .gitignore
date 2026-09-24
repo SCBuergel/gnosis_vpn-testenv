@@ -13,4 +13,8 @@ result*
 # e2e harness: node deps and run outputs
 e2e/node_modules/
 e2e/results/
+
+# docker/target: uv's lock and venv for its tests (no dependencies to lock)
+docker/target/uv.lock
+docker/target/.venv/
 __pycache__/

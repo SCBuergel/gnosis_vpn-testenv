@@ -249,7 +249,8 @@ def pytest_runtest_makereport(item, call):
     tid = _test_id(item)
     if rep.when != "call" or not tid or state.run is None:
         return
-    kind = getattr(item.module, "KIND", "gate")
+    checks = getattr(item, "funcargs", {}).get("checks")
+    kind = getattr(checks, "kind", None) or getattr(item.module, "KIND", "gate")   # a test may promote itself (T17 with a map)
     if rep.failed and kind != "gate":
         # only a gate may fail the run: a diagnostic or runbook item that raised (timeout, exception) is recorded as
         # WARN and its pytest outcome rewritten, so the process exit code stays a gate-only signal

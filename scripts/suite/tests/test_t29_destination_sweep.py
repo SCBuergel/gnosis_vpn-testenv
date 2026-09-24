@@ -1,7 +1,8 @@
 """T29-destination-sweep (runbook, production): which exits accept a tunnel right now, and at what speed? For every
-destination the client reports: connect after a 5 s idle (floored to SURB_RAMP_WAIT), in-tunnel ping, one download
-of BYTES, disconnect; CYCLES rounds; one row per destination and cycle. PASS per destination and cycle iff the
-connect succeeds; RTT and rate are recorded.
+destination the client reports: connect, idle SURB_RAMP_WAIT (25 s; the 5 s asked for is floored to it on purpose,
+a shorter idle starves the first transfer's return path), in-tunnel ping, one download of BYTES, disconnect;
+CYCLES rounds; one row per destination and cycle, so a sweep costs about destinations x CYCLES x (connect + 25 s
++ the download). PASS per destination and cycle iff the connect succeeds; RTT and rate are recorded.
 
 Why: a 40-run cycle over 8 exits found one that connected but carried ~0 and one that stayed down for hours after
 a ladder; a page-load campaign found the same two."""

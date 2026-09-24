@@ -4,19 +4,25 @@ byte, Mbit/s, HTTP status, complete or truncated, and the longest zero-progress 
 5 s stall and a uniformly slow transfer have the same Mbit/s; the stall is what the user feels). After disconnect:
 the four client-log error counters over the session and the client's undecodable counter before and after.
 
-Pass iff every transfer completes in both directions, reassembly_failed = 0 and reconnects = 0 over the session,
-and the download and upload medians at the largest size are at least DOWN_MIN_MBIT / UP_MIN_MBIT. Frame discards,
-decapsulation errors and the smaller sizes' medians are recorded, not asserted. Calibration: the reference stack
-reads 10.9 down (stdev 0.45) and 13.0 up (stdev 0.69) over ten warm 10 MB sessions; the 2026-09 relay
-decode-concurrency regression halved throughput, so 7 catches a halving and clears host noise (+-12 %).
+Three verdicts. Per size: PASS iff every transfer of that size completes in both directions (the line carries the
+medians and the longest zero-progress second, so a size that stalls to the cap reads as a stall). Session
+counters: PASS iff reassembly_failed = 0 and reconnects = 0. Floors: the download and upload medians at FLOOR_MIB
+(the largest size in the cycle at or under it) must be at least DOWN_MIN_MBIT / UP_MIN_MBIT. Frame discards,
+decapsulation errors and the other sizes' medians are recorded, not asserted. Calibration: the floors come from
+ten warm 10 MB sessions on the reference stack, 10.9 down (stdev 0.45) and 13.0 up (stdev 0.69); the 2026-09
+relay decode-concurrency regression halved throughput, so 7 catches a halving and clears host noise (+-12 %). No
+size above 10 MiB has been calibrated as a rate, which is why the floors are not judged there.
 
-Known FAIL on the reference stack at full length (2026-09-23, run r3t04, hoprd 4.1.3 + client 0.96.3): two of
-three 50 MiB downloads ran at 10-19 Mbit/s for 17-23 s (25-30 MB), hit a burst of frame discards (355 and 163 in
-ten seconds), then delivered nothing until the 90 s cap; five tunnel-ping timeouts and one reconnect followed,
-and the third 50 MiB download completed on the fresh session. 1 and 10 MiB and every 50 MiB upload bar the one
-on the dead session completed; the exit and relays logged nothing beyond routine SURB evictions. That is the
-download-side collapse of exploration/deep-2026-09-22, now reproduced by a plain TCP download; the 10 MB
-transfer is too short to reach it. --fast (SIZES_MIB "1 10") passes.
+Open finding, 2026-09-23 (run r3t04; hoprd 4.1.3 from the hoprd-4arb tree with its inert env-toggle patch,
+client 0.96.3-a974f5fc glibc image, server 0.7.0): two of three 50 MiB downloads ran at 10-19 Mbit/s for
+17-23 s (25-30 MB), hit a burst of frame discards (355 and 163 in ten seconds), then delivered nothing until the
+90 s cap; five tunnel-ping timeouts and one reconnect followed, and the third completed on the fresh session.
+1 and 10 MiB and every 50 MiB upload bar the one on the dead session completed; the exit and relays logged
+nothing beyond routine SURB evictions. That is the download-side collapse of exploration/deep-2026-09-22,
+reproduced by a plain TCP download that runs longer than a 10 MB one. Until it is fixed the full-length run is
+red on the 50 MiB completion and the session counters; --fast (SIZES_MIB "1 10") passes. When an issue exists,
+the 50 MiB completion can become an XFAIL naming it (discard burst, zero progress to the cap, tunnel-ping
+reconnect) so it reports XPASS the day the defect is gone; a bare "known failure" is not that.
 
 Why: this harness produced every cell of the investigation, and its three outputs do not substitute for each
 other: completions caught truncation, Mbit/s caught the 2x relay regression, the error counters caught the client
@@ -29,7 +35,7 @@ from suitelib.target import summary_row, transfer_series
 
 TEST = "T04-fixed-throughput"
 KIND = "gate"
-KNOBS = dict(WAIT_AFTER_CONNECT=0, LABEL="t04", SIZES_MIB=q("1 10 50", "1 10"), DOWN_MIN_MBIT=7, UP_MIN_MBIT=7)
+KNOBS = dict(WAIT_AFTER_CONNECT=0, LABEL="t04", SIZES_MIB=q("1 10 50", "1 10"), FLOOR_MIB=10, DOWN_MIN_MBIT=7, UP_MIN_MBIT=7)
 MIB = 1 << 20
 UNDECODABLE = 'hopr_packet_rejected_count{reason="undecodable"}'
 
@@ -49,16 +55,17 @@ def test_fixed_throughput(cfg, client, cluster, target, checks, knobs):
     undec1 = client.telemetry_metric(UNDECODABLE)
     checks.row(label=k.LABEL, kind="summary", summary=summary_row(summary), errors=errs, connect_ms=s.connect_ms,
                wait_after_connect=k.WAIT_AFTER_CONNECT, undecodable_before=undec0, undecodable_after=undec1)
-    n, dc, uc = summary["n"], summary["down_complete"], summary["up_complete"]
-    per_size = " ".join(f"{b // MIB}MiB:{v['down_median']}/{v['up_median']}" for b, v in summary["by_size"].items())
-    detail = (f"reassembly={errs['reassembly_failed']} reconnects={errs['reconnects']} (tunnel-ping timeouts "
-              f"{errs['ping_timeouts']}) discards={errs['frame_discarded']} decap={errs['decap_error']}; "
-              f"down/up Mbit/s per size {per_size}")
-    if dc == n and uc == n and errs["reassembly_failed"] == 0 and errs["reconnects"] == 0:
-        checks.passed(f"all {n} transfers complete both ways; {detail}")
-    else:
-        checks.failed(f"complete {dc}/{n} down {uc}/{n} up; {detail}")
-    # the floors are calibrated on a bulk transfer: judge them at the largest size, where ramp and TTFB weigh least
-    largest = summary["by_size"][max(summary["by_size"])]
-    checks.assert_min(f"download median at {max(sizes) // MIB} MiB", largest["down_median"], "Mbit/s", "DOWN_MIN_MBIT", k.DOWN_MIN_MBIT)
-    checks.assert_min(f"upload median at {max(sizes) // MIB} MiB", largest["up_median"], "Mbit/s", "UP_MIN_MBIT", k.UP_MIN_MBIT)
+    # completion per size, as its own verdict: a size whose transfers stall to the cap reads as a stall, not as a rate
+    for b, v in summary["by_size"].items():
+        what = (f"{b // MIB} MiB: {v['down_complete']}/{v['n']} down and {v['up_complete']}/{v['n']} up complete, "
+                f"medians {v['down_median']}/{v['up_median']} Mbit/s, longest zero-progress {v['stall_max_s']} s")
+        (checks.passed if v["down_complete"] == v["n"] and v["up_complete"] == v["n"] else checks.failed)(what)
+    counters = (f"session counters: reassembly={errs['reassembly_failed']} reconnects={errs['reconnects']} (tunnel-ping timeouts "
+                f"{errs['ping_timeouts']}) discards={errs['frame_discarded']} decap={errs['decap_error']}")
+    (checks.passed if errs["reassembly_failed"] == 0 and errs["reconnects"] == 0 else checks.failed)(counters)
+    # the floors are calibrated at FLOOR_MIB (10 warm 10 MB sessions) and judged there; a larger size is only a
+    # completion check above, because a rate measured through a stall is a stall, not a throughput
+    floor_size = max([b for b in sizes if b <= k.FLOOR_MIB * MIB] or [min(sizes)])
+    at = summary["by_size"][floor_size]
+    checks.assert_min(f"download median at {floor_size // MIB} MiB", at["down_median"], "Mbit/s", "DOWN_MIN_MBIT", k.DOWN_MIN_MBIT)
+    checks.assert_min(f"upload median at {floor_size // MIB} MiB", at["up_median"], "Mbit/s", "UP_MIN_MBIT", k.UP_MIN_MBIT)

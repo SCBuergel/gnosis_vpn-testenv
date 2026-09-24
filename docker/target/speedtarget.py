@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 DEFAULT_SEED = 20260901
 MAXB = 200 * 1024 * 1024
-CHUNK = random.Random(DEFAULT_SEED).randbytes(1 << 20)
+CHUNK = random.Random(DEFAULT_SEED).randbytes(1 << 20)      # module-wide: every server in one process serves one seed
 
 
 def make_chunk(seed):
