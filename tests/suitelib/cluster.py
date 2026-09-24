@@ -121,12 +121,20 @@ class Cluster:
         for idx, ms in delays.items():
             port = self.p2p_port(idx)
             if not port:
-                log(f"netem: no p2p port for node {idx}")
-                continue
-            shell.run(["tc", "qdisc", "add", "dev", iface, "parent", f"1:{band}", "handle", f"{band}0:", "netem",
-                       "delay", f"{ms}ms", "limit", "20000"], timeout=30)
-            shell.run(["tc", "filter", "add", "dev", iface, "protocol", "ip", "parent", "1:0", "prio", "1", "u32",
-                       "match", "ip", "dport", str(port), "0xffff", "flowid", f"1:{band}"], timeout=30)
+                log(f"netem: no p2p port for node {idx}; impairment NOT applied")
+                self.netem_clear()
+                return False
+            # every step checked: a missing sch_netem module or a rejected filter would otherwise leave the ladder
+            # measuring an unimpaired path under an impaired label
+            for cmd in (["tc", "qdisc", "add", "dev", iface, "parent", f"1:{band}", "handle", f"{band}0:", "netem",
+                         "delay", f"{ms}ms", "limit", "20000"],
+                        ["tc", "filter", "add", "dev", iface, "protocol", "ip", "parent", "1:0", "prio", "1", "u32",
+                         "match", "ip", "dport", str(port), "0xffff", "flowid", f"1:{band}"]):
+                r = shell.run(cmd, timeout=30)
+                if r.returncode != 0:
+                    log(f"netem: node {idx} (:{port}) +{ms}ms NOT applied: {' '.join(cmd[:4])}... rc={r.returncode} {r.stderr.strip()[:160]}")
+                    self.netem_clear()
+                    return False
             log(f"netem: node {idx} (:{port}) +{ms}ms")
             band += 1
         return True
@@ -194,7 +202,8 @@ class NodeSampler:
 
     def rows(self):
         try:
-            return [json.loads(l) for l in open(self.path) if l.strip()]
+            with open(self.path) as fh:
+                return [json.loads(l) for l in fh if l.strip()]
         except FileNotFoundError:
             return []
 

@@ -2,6 +2,7 @@
 a non-private subnet (the client keeps RFC1918 off the tunnel); the exit NATs into it. `ip` is the address
 reached through the exit, `ip_direct` the one on the client's own network for no-VPN baselines."""
 import json
+import shlex
 import statistics as st
 
 from . import shell
@@ -32,10 +33,12 @@ class Target:
         return bool(self.ip)
 
     def down_url(self, nbytes, host=None):
-        return f"http://{host or self.ip}:{self.http_port}/down?bytes={nbytes}"
+        """The download URL, shell-quoted: every caller pastes it into an `sh -c` command in the sidecar, and the host
+        can come from TARGET_HOST / --target."""
+        return shlex.quote(f"http://{host or self.ip}:{self.http_port}/down?bytes={int(nbytes)}")
 
     def up_url(self, host=None):
-        return f"http://{host or self.ip}:{self.http_port}/up"
+        return shlex.quote(f"http://{host or self.ip}:{self.http_port}/up")
 
 
 def _curl_result(w, want):
@@ -53,16 +56,20 @@ def _curl_result(w, want):
 
 def curl_down(client, host, nbytes, cap):
     """Sized download from the target inside the client: {code, bytes, elapsed, ttfb, mbit, complete}."""
+    cap = int(cap)
+    url = shlex.quote(f"http://{host}:{Target.http_port}/down?bytes={int(nbytes)}")
     w = client.out(f"curl -s -o /dev/null -m {cap} -w '%{{http_code}} %{{size_download}} %{{time_total}} %{{time_starttransfer}}' "
-                   f"'http://{host}:{Target.http_port}/down?bytes={nbytes}' 2>/dev/null || true", timeout=cap + 30)
+                   f"{url} 2>/dev/null || true", timeout=cap + 30)
     return _curl_result(w, nbytes)
 
 
 def curl_up(client, host, nbytes, cap):
+    cap, nbytes = int(cap), int(nbytes)
+    url = shlex.quote(f"http://{host}:{Target.http_port}/up")
     client.exec(f"[ -f /tmp/up.bin ] && [ $(stat -c %s /tmp/up.bin) -eq {nbytes} ] || head -c {nbytes} /dev/zero > /tmp/up.bin", timeout=60)
     w = client.out(f"curl -s -o /dev/null -m {cap} -w '%{{http_code}} %{{size_upload}} %{{time_total}} %{{time_starttransfer}}' "
                    f"-H 'Content-Type: application/octet-stream' --data-binary @/tmp/up.bin "
-                   f"'http://{host}:{Target.http_port}/up' 2>/dev/null || true", timeout=cap + 30)
+                   f"{url} 2>/dev/null || true", timeout=cap + 30)
     return _curl_result(w, nbytes)
 
 
@@ -116,14 +123,14 @@ def summary_row(s):
 
 def ping_rtts(client, host, count, interval=1, wait=3):
     """In-tunnel ping RTTs (ms) from the client."""
-    txt = client.out(f"ping -c {count} -i {interval} -W {wait} {host} 2>/dev/null | grep -oE 'time=[0-9.]+' | cut -d= -f2",
+    txt = client.out(f"ping -c {int(count)} -i {interval} -W {wait} {shlex.quote(str(host))} 2>/dev/null | grep -oE 'time=[0-9.]+' | cut -d= -f2",
                      timeout=count * (interval + wait) + 30)
     return [float(x) for x in txt.split()]
 
 
 def ping_avg(client, host, count=5, interval=0.2, wait=2):
     """Average RTT (ms) from ping's summary line, or None."""
-    txt = client.out(f"ping -c {count} -i {interval} -W {wait} {host} 2>/dev/null | sed -n 's|.*= \\([0-9.]*\\)/\\([0-9.]*\\)/.*|\\2|p'",
+    txt = client.out(f"ping -c {int(count)} -i {interval} -W {wait} {shlex.quote(str(host))} 2>/dev/null | sed -n 's|.*= \\([0-9.]*\\)/\\([0-9.]*\\)/.*|\\2|p'",
                      timeout=count * (interval + wait) + 30)
     try:
         return float(txt)

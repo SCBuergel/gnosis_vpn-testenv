@@ -89,7 +89,7 @@ One download of `BYTES` at `hopr_transport::path=debug`; return paths counted pe
 
 ### T09-impairment-ladder · **gate** · resilience
 
-`tc netem` on the host toward the relays' P2P ports, fresh session per cell: `equal-<ms>` for each of `RUNGS`="0 25 50" ("0 25"), `gap-<ms>` (relay 1 only), `far-100ms` (`FAR`=100, relay 2 only). Per cell a 3 Mbit/s download stream of `STREAM_S`=120 s (90; 8) first, then 3 (2) transfer reps. PASS iff every equal cell has `reassembly_failed`=0 and `reconnects`=0. Gap and far cells, stream loss and completions recorded. SKIP without root or below `CLUSTER_SIZE`=3.
+`tc netem` on the host toward the relays' P2P ports, fresh session per cell: `equal-<ms>` for each of `RUNGS`="0 25 50" ("0 25"), `gap-<ms>` (relay 1 only), `far-100ms` (`FAR`=100, relay 2 only). Per cell a 3 Mbit/s download stream of `STREAM_S`=120 s (90; 8) first, then 3 (2) transfer reps. PASS iff every equal cell has `reassembly_failed`=0 and `reconnects`=0. Gap and far cells, stream loss and completions recorded. A cell whose `tc` steps fail is FAIL (equal) or RECORDED (gap, far) and is not measured. SKIP without root or below `CLUSTER_SIZE`=3.
 
 ### T10-forced-reconnect · **gate** · resilience
 

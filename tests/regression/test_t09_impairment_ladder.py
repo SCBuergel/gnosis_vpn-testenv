@@ -4,7 +4,9 @@ toward their P2P ports: no cluster restart, no channel change (a close/reopen in
 PendingToClose and the exit with no usable return relay, wedging every later test). Cells, each on a fresh
 session: equal-<ms> delays both relays by a rung of RUNGS, gap-<ms> delays relay 1 only, far-<FAR>ms pushes relay
 2 alone to FAR. Each cell runs a 3 Mbit/s download stream of STREAM_S first, then 3 (--fast 2) T04-style transfer
-reps. Needs root for tc; SKIP below CLUSTER_SIZE 3.
+reps. Needs root for tc; SKIP below CLUSTER_SIZE 3. Every tc step of an impairment is checked: a step that fails is
+the cell's verdict (FAIL for an equal cell, RECORDED for a gap or far cell) and the cell is not measured, so a
+missing sch_netem or a rejected filter can never produce a number under an impaired label.
 
 Pass iff every equal cell has reassembly_failed = 0 and reconnects = 0. Gap and far cells, stream loss and
 transfer completion are recorded, not asserted. The stream runs first because after bulk transfers it showed 9-54
@@ -62,15 +64,22 @@ def test_impairment_ladder(cfg, run, client, live_cluster, target, checks, knobs
         else:
             checks.record(msg)
 
+    def impaired(delays, label, gate):
+        """Apply the cell's impairment; a tc step that fails is the cell's verdict (FAIL for a gate cell, RECORDED
+        otherwise), never a measurement under a wrong label."""
+        if cluster.netem_apply(delays):
+            return True
+        (checks.failed if gate else checks.record)(f"{label}: impairment NOT applied (a tc step failed, see the log); cell not measured")
+        return False
+
     try:
         for ms in k.numbers("RUNGS"):
             ms = int(ms) if ms == int(ms) else ms
-            cluster.netem_apply({r: ms for r in relays} if ms else {})
-            cell(f"equal-{ms}ms", True)
-            if ms:
-                cluster.netem_apply({1: ms})
+            if impaired({r: ms for r in relays} if ms else {}, f"equal-{ms}ms", True):
+                cell(f"equal-{ms}ms", True)
+            if ms and impaired({1: ms}, f"gap-{ms}ms", False):
                 cell(f"gap-{ms}ms", False)
-        cluster.netem_apply({2: k.FAR})
-        cell(f"far-{k.FAR}ms", False)
+        if impaired({2: k.FAR}, f"far-{k.FAR}ms", False):
+            cell(f"far-{k.FAR}ms", False)
     finally:
         cluster.netem_clear()
