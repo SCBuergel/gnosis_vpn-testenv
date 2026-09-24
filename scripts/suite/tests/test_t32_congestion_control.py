@@ -25,7 +25,8 @@ KNOBS = dict(PAIRS=q(6, 3))
 
 def test_congestion_control(cfg, client, target, checks, knobs):
     try:
-        avail = open("/proc/sys/net/ipv4/tcp_available_congestion_control").read().split()
+        with open("/proc/sys/net/ipv4/tcp_available_congestion_control") as fh:
+            avail = fh.read().split()
     except OSError:
         avail = []
     if "bbr" not in avail:

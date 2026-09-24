@@ -21,15 +21,16 @@ KNOBS = {}
 
 def analyse(path):
     reads, fails = [], 0
-    for line in open(path, errors="replace"):
-        if "inbound datagram" not in line:
-            continue
-        m = re.search(r"len=(\d+)", line)
-        if not m:
-            continue
-        n, f = int(m.group(1)), "failed=true" in line
-        reads.append((n, f))
-        fails += f
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            if "inbound datagram" not in line:
+                continue
+            m = re.search(r"len=(\d+)", line)
+            if not m:
+                continue
+            n, f = int(m.group(1)), "failed=true" in line
+            reads.append((n, f))
+            fails += f
     hist = collections.Counter(n for n, _ in reads)
     slabs, cur = [], 0
     for n, _ in reads:
@@ -37,6 +38,8 @@ def analyse(path):
         if n < 1500:
             slabs.append(cur)
             cur = 0
+    if cur:
+        slabs.append(cur)        # a run still open when the log ends is a slab too, not nothing
     multi = [s for s in slabs if s > 1500]
     return {"reads": len(reads), "failed": fails, "max_read": max(hist) if hist else 0, "top": hist.most_common(5),
             "multi_slabs": len(multi), "max_slab": max(multi) if multi else 0}

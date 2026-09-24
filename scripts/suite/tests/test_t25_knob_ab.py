@@ -45,19 +45,24 @@ def test_knob_ab(cfg, client, target, checks, knobs):
         return ok
 
     a = cell("baseline")
-    if k.CLIENT_KNOB:
-        if not restart_client(k.CLIENT_KNOB, "knob"):
-            return
-    else:
-        if not shell.ok("just cluster-restart", timeout=1800, cwd=cwd, env={**os.environ, "CLUSTER_ENV": k.KNOB}):
-            checks.record(f"cluster restart with {k.KNOB} failed")
-            return
-        client.wait_worker(180)
-    b = cell("knob")
-    if k.CLIENT_KNOB:
-        restart_client("", "restore")
-    else:
-        shell.run("just cluster-restart", timeout=1800, cwd=cwd)
-    client.wait_worker(180)
+    b = {}
+    try:
+        if k.CLIENT_KNOB:
+            if not restart_client(k.CLIENT_KNOB, "knob"):
+                return
+        else:
+            if not shell.ok("just cluster-restart", timeout=1800, cwd=cwd, env={**os.environ, "CLUSTER_ENV": k.KNOB}):
+                checks.record(f"cluster restart with {k.KNOB} failed; A/B abandoned")
+                return
+            client.wait_worker(180)
+        b = cell("knob")
+    finally:
+        # the default configuration comes back whatever happened above: an abandoned A/B must not leave the client
+        # stopped or running with the knob (a runbook item that leaves the stack dead is the deadman rule again)
+        if k.CLIENT_KNOB:
+            restart_client("", "restore")
+        else:
+            shell.run("just cluster-restart", timeout=1800, cwd=cwd)
+            client.wait_worker(180)
     checks.record(f"baseline down {a.get('down_median')} up {a.get('up_median')}; with {k.CLIENT_KNOB or k.KNOB}: "
                   f"down {b.get('down_median')} up {b.get('up_median')} Mbit/s")

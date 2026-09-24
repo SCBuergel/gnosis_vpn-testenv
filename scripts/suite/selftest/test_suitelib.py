@@ -163,3 +163,14 @@ def test_run_dir_in_client_uses_basename(tmp_path):
     r = RunDir(tmp_path / "abc")
     assert r.in_client == "/suite-out/abc"
     assert os.path.isdir(r / "logs") and os.path.isdir(r / "samples")
+
+
+def test_t31_analyse_counts_a_trailing_slab(tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+    from test_t31_frame_forensics import analyse
+    log = tmp_path / "client.log"
+    lines = ["inbound datagram len=1500 failed=true"] * 3 + ["inbound datagram len=200 failed=false"] + \
+            ["inbound datagram len=1500 failed=true"] * 2          # a run still open when the log ends
+    log.write_text("\n".join(lines) + "\n")
+    r = analyse(str(log))
+    assert r["reads"] == 6 and r["failed"] == 5 and r["multi_slabs"] == 2 and r["max_slab"] == 4700

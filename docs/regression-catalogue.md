@@ -35,8 +35,8 @@ Every number a gate holds a measurement against is absolute and named; nothing i
 
 | Knob | Default | Used by | Reference stack measured | Why this value |
 | --- | --- | --- | --- | --- |
-| `DOWN_MIN_MBIT` | 7 Mbit/s | T04-fixed-throughput download median at `FLOOR_MIB`=10 | 10.9 (stdev 0.45 over 10 warm 10 MB sessions; no larger size is calibrated as a rate) | the 2026-09 relay regression halved throughput; 7 catches a halving and clears ±12 % host noise |
-| `UP_MIN_MBIT` | 7 Mbit/s | T04-fixed-throughput upload median at `FLOOR_MIB`=10 | 13.0 (stdev 0.69) | a halving lands at 6.5 |
+| `DOWN_MIN_MBIT` | 7 Mbit/s | T04-fixed-throughput download median at `FLOOR_MIB`=10, or the largest size in the cycle under it (2 MiB at `--very-fast`) | 10.9 (stdev 0.45 over 10 warm 10 MB sessions; no larger size is calibrated as a rate) | the 2026-09 relay regression halved throughput; 7 catches a halving and clears ±12 % host noise |
+| `UP_MIN_MBIT` | 7 Mbit/s | T04-fixed-throughput upload median at `FLOOR_MIB`=10, or the largest size under it | 13.0 (stdev 0.69) | a halving lands at 6.5 |
 | `DOWN_P95_MAX_MS` | 1500 ms | T05-loaded-latency RTT p95 during a saturating download | 359, 537, 1076 ms over three runs | the fleet's bufferbloat finding was 2-4 s; 40 % over the worst healthy reading |
 | `UP_P95_MAX_MS` | 2500 ms | T05-loaded-latency RTT p95 during a saturating upload | 1124, 1153, 1746 ms | a parallel upload on the fleet hit 8.9 s |
 | `LOSS_MAX` | 5 % | T06-realtime-udp, every arm | 0.02-1.7 % | a call above 5 % loss is audibly broken; the fleet's defect read 54-96 % |
@@ -68,7 +68,7 @@ Versions, image digests, OCI revision labels and the compiled-in `/hopr/mix/<ver
 
 ### T04-fixed-throughput · **gate**
 
-One session; `REPS` cycles of download-then-upload at each of `SIZES_MIB`="1 10 50" MiB ("1 10"; `--very-fast` "1 2"), `CAP` each, per-second stall detection, client-log counters, undecodable telemetry delta. `WAIT_AFTER_CONNECT`=0 (floored to `SURB_RAMP_WAIT`). Three verdicts: per size PASS iff every transfer of that size completes both ways (the line names the medians and the longest zero-progress second); session counters PASS iff `reassembly_failed`=0 and `reconnects`=0; floors: the medians at `FLOOR_MIB`=10 ≥ `DOWN_MIN_MBIT`=7 / `UP_MIN_MBIT`=7. Discards, decap errors and the other sizes' medians recorded. Open finding on the reference stack (run r3t04, 2026-09-23): the 50 MiB download stalls after 25-30 MB (frame-discard burst, zero progress to the cap, tunnel-ping reconnect), so the full-length run fails the 50 MiB completion and the counters; `--fast` passes. Details in the module docstring.
+One session; `REPS` cycles of download-then-upload at each of `SIZES_MIB`="1 10 50" MiB ("1 10"; `--very-fast` "1 2"), `CAP` each, per-second stall detection, client-log counters, undecodable telemetry delta. `WAIT_AFTER_CONNECT`=0 (floored to `SURB_RAMP_WAIT`). Three kinds of verdict line (one per size, one for the counters, two floors): per size PASS iff every transfer of that size completes both ways (the line names the medians and the longest zero-progress second); session counters PASS iff `reassembly_failed`=0 and `reconnects`=0; floors: the medians at `FLOOR_MIB`=10 ≥ `DOWN_MIN_MBIT`=7 / `UP_MIN_MBIT`=7. Discards, decap errors and the other sizes' medians recorded. Open finding on the reference stack (run r3t04, 2026-09-23): the 50 MiB download stalls after 25-30 MB (frame-discard burst, zero progress to the cap, tunnel-ping reconnect), so the full-length run fails the 50 MiB completion and the counters; `--fast` passes. Details in the module docstring.
 
 ### T05-loaded-latency · **gate**
 

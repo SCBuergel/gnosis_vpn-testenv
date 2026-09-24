@@ -41,7 +41,8 @@ def test_background_load(cfg, client, client2, target, checks, knobs):
                                 f"{target.down_url(int(kb) * 1000)}; sleep 2; done")
                 time.sleep(4)
                 r = curl_down(client, target.ip, cfg.bytes, cfg.cap)
-                # by pid, then the in-flight curl by exact name: a pkill -f pattern would match this shell's own command line
+                # by pid, then the in-flight curl by exact name: a pkill -f pattern would match this shell's own command line;
+                # the loop's current `sleep 2` is left to expire on its own
                 client2.exec('kill "$(cat /tmp/t19-trickle.pid 2>/dev/null)" 2>/dev/null; pkill -x curl; rm -f /tmp/t19-trickle.pid; true')
                 ratio = round(r["mbit"] / ctrl["mbit"], 2) if ctrl["mbit"] > 0 else None
                 checks.row(arm=f"trickle-{kb}kB", download=r, ratio_to_idle=ratio)

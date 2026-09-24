@@ -4,7 +4,7 @@ byte, Mbit/s, HTTP status, complete or truncated, and the longest zero-progress 
 5 s stall and a uniformly slow transfer have the same Mbit/s; the stall is what the user feels). After disconnect:
 the four client-log error counters over the session and the client's undecodable counter before and after.
 
-Three verdicts. Per size: PASS iff every transfer of that size completes in both directions (the line carries the
+Three kinds of verdict line (one per size, one for the counters, two floors). Per size: PASS iff every transfer of that size completes in both directions (the line carries the
 medians and the longest zero-progress second, so a size that stalls to the cap reads as a stall). Session
 counters: PASS iff reassembly_failed = 0 and reconnects = 0. Floors: the download and upload medians at FLOOR_MIB
 (the largest size in the cycle at or under it) must be at least DOWN_MIN_MBIT / UP_MIN_MBIT. Frame discards,
