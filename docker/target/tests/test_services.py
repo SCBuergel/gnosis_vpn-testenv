@@ -1,6 +1,6 @@
 """The target's own tests, on loopback, stdlib clients only: every service answers its wire protocol, the speed
 target's content is sized, incompressible and seed-determined, and main.py exits when a service dies. The probes'
-end-to-end contract (probe process against service) is scripts/suite/selftest/test_target_protocol.py."""
+end-to-end contract (probe process against service) is tests/selftest/test_target_protocol.py."""
 import json
 import socket
 import struct

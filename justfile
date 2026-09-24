@@ -446,7 +446,7 @@ _client-start name state_dir extra_index:
     just _tools-start "{{name}}"
 
 # The tools sidecar of one client: joins the client's network namespace (tunnel interface, routes, sysctls), carries
-# curl, ping, ip and python for the probes, mounts scripts/suite and the run directory. Removed with the client.
+# curl, ping, ip and python for the probes, mounts tests/ (the probes) and the run directory. Removed with the client.
 _tools-start name:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -457,7 +457,7 @@ _tools-start name:
         --network "container:{{name}}" \
         --cap-add=NET_ADMIN --cap-add=NET_RAW \
         --log-opt max-size=10m --log-opt max-file=2 \
-        --volume "{{justfile_directory()}}/scripts/suite:/suite:ro" \
+        --volume "{{justfile_directory()}}/tests:/suite:ro" \
         --volume "{{SUITE_OUT_DIR}}:/suite-out" \
         "{{TOOLS_IMAGE}}" > /dev/null
     echo "Started {{name}}-tools ({{TOOLS_IMAGE}}, network namespace of {{name}})"
@@ -734,18 +734,19 @@ test name *args:
     #!/usr/bin/env bash
     set -euo pipefail
     eval "$(just _suite-env)"
-    exec python3 "{{justfile_directory()}}/scripts/suite/run.py" --only "{{name}}" --no-preconditions {{args}}
+    cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression --only "{{name}}" --no-preconditions {{args}}
 
-# Run the regression suite (one run, every test; --fast, --very-fast, --only, --skip, --knob) against the live stack; results in SUITE_OUT_DIR/<run-id>/
+# Run the regression suite (one run, every test; --fast, --very-fast, --only, --skip, --group, --knob) against the live stack;
+# plain pytest under tests/ (conftest.py holds every option); results in SUITE_OUT_DIR/<run-id>/
 suite *args:
     #!/usr/bin/env bash
     set -euo pipefail
     eval "$(just _suite-env)"
-    exec python3 "{{justfile_directory()}}/scripts/suite/run.py" {{args}}
+    cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression {{args}}
 
 # Offline self-tests: the suite library, the target's own tests, and every probe against every target service on loopback (no stack needed)
 suite-selftest: target-test
-    python3 -m pytest "{{justfile_directory()}}/scripts/suite/selftest" -q
+    python3 -m pytest "{{justfile_directory()}}/tests/selftest" -q
 
 # The traffic target's own tests (docker/target/tests), on loopback
 target-test:
@@ -769,12 +770,12 @@ up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config tar
 # Restart only the cluster (new HOPRD_BIN / CLUSTER_ENV / CLUSTER_LATENCY), regenerate config, restart the client
 cluster-restart: client-stop cluster-stop cluster-start cluster-wait gen-config client-start
 
-# Run the suite across version/config cells from a cells file (see scripts/suite/matrix.py --help)
+# Run the suite across version/config cells from a cells file (see tests/matrix.py --help)
 matrix cells *args:
     #!/usr/bin/env bash
     set -euo pipefail
     eval "$(just _suite-env)"
-    exec python3 "{{justfile_directory()}}/scripts/suite/matrix.py" "{{cells}}" {{args}}
+    exec python3 "{{justfile_directory()}}/tests/matrix.py" "{{cells}}" {{args}}
 
 # ─── Scripts ─────────────────────────────────────────────────────────────────
 

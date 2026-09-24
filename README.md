@@ -93,13 +93,14 @@ Budget ~10 minutes per destination for the full profile (dominated by the two sp
 
 ## Regression suite
 
-[docs/regression-catalogue.md](docs/regression-catalogue.md) describes 32 tests distilled from the 2026-09 throughput and reliability investigations; [scripts/suite/](scripts/suite/README.md) implements them as pytest tests (`scripts/suite/tests/test_tNN_<name>.py`) with a shared library, and a version-matrix driver.
+[docs/regression-catalogue.md](docs/regression-catalogue.md) describes 32 tests distilled from the 2026-09 throughput and reliability investigations; [tests/](tests/README.md) implements them as plain pytest (`tests/regression/test_tNN_<name>.py`, options in `tests/conftest.py`) with a shared library and a version-matrix driver.
 
 ```sh
 just up-nobuild                                   # pre-built binaries/images: cluster + server + target + client
 just test t04                                     # one catalogue test against the live stack
 just suite --fast                                 # the one run, shorter durations (--very-fast, --only, --skip, --knob)
-just matrix scripts/suite/cells/example.cells     # one stack per version/config cell
+just suite --group throughput                     # one group of tests (preflight, throughput, realtime, resilience, config, attribution, multiclient, endurance)
+just matrix tests/cells/example.cells             # one stack per version/config cell
 just suite-selftest                               # offline: library unit tests, the target's own tests, every probe against every target service on loopback
 just suite --client gnosis_vpn-client --dest node-0 --target 203.0.113.7 --no-cluster   # production network: any client, any host running docker/target
 just nightly                                      # the daily battery: build the sibling checkouts as they are, up, suite --fast, down
