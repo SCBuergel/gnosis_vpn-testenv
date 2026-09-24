@@ -44,6 +44,11 @@ CALS = struct.Struct("!IffIfI")
 dst = (a.host, a.port)
 log = open(a.out + ".csv", "w", buffering=1 << 16)      # deliberately long-lived: the per-packet log for the whole probe run, closed at the end  # noqa: SIM115
 loglock = threading.Lock()
+# `started` and `hold_until` are control flags written by the watcher (on_rebind) and the receiver (the server's ACK)
+# and read by the sender: they change under ctl and are read as one snapshot. The counters in `state` are each
+# written by one thread only (sent/send_failed by the sender, recv/dup/delay/gaps by the receiver) and read after
+# the threads are joined, so they need no lock.
+ctl = threading.Lock()
 state = {"sent": [0, 0], "send_failed": [0, 0], "recv": [0, 0], "dup": [0, 0], "delay": [[], []], "last_recv": None, "gaps": [],
          "seen": [set(), set()], "started": False, "hold_until": 0.0}
 
@@ -55,8 +60,9 @@ def ev(name, extra=""):
 
 
 def on_rebind(idx):
-    state["started"] = False       # re-announce so the server learns the new address
-    state["hold_until"] = time.monotonic() + a.rejoin_delay
+    with ctl:
+        state["started"] = False       # re-announce so the server learns the new address
+        state["hold_until"] = time.monotonic() + a.rejoin_delay
 
 
 ts = probelib.TunnelSocket(a.iface, reuse=False, on_event=ev)
@@ -71,11 +77,13 @@ def sender():
     flag = b"\x01" if a.idle_pause else b"\x00"
     while not ts.stop.is_set() and time.monotonic() - t0 < a.duration:
         now = time.monotonic()
-        if now < state["hold_until"]:
+        with ctl:
+            started, hold_until = state["started"], state["hold_until"]
+        if now < hold_until:
             time.sleep(0.05)
             t0 += 0.05             # keep the schedule from bursting after the hold
             continue
-        if not state["started"] and now - last_start > 1.0:
+        if not started and now - last_start > 1.0:
             last_start = now
             try:
                 ts.sock.sendto(b"CALS" + CALS.pack(a.sid, a.duration, a.video_pps, a.video_size, a.audio_pps, a.audio_size) + flag, dst)
@@ -133,7 +141,8 @@ def receiver():
             with loglock:
                 log.write("R,%d,%d,%.6f,%.6f\n" % (kind, seq, sent_at, now))
         elif tag == b"CALA":
-            state["started"] = True
+            with ctl:
+                state["started"] = True
             ev("ACK")
 
 
