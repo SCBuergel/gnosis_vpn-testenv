@@ -12,6 +12,8 @@ bumped protocol id, that was not in the shipped binary. A HOPR packet's frame si
 so mismatched versions misparse instead of failing to connect; reading the ids out of the binaries settles it."""
 import hashlib
 import json
+import re
+import subprocess
 import time
 
 from suitelib import shell
@@ -33,15 +35,26 @@ def _sha16(path):
         return ""
 
 
+def _protocol_id(container, path):
+    """The first /hopr/mix/<ver> string in a binary inside a container, or '' (no shell, bytes searched as bytes)."""
+    try:
+        raw = subprocess.run(["docker", "exec", container, "cat", path], capture_output=True, timeout=120).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    m = re.search(rb"/hopr/mix/[0-9.]+", raw or b"")
+    return m.group(0).decode() if m else ""
+
+
 def test_build_provenance(cfg, run, client, checks, knobs):
     cv = client.version()
-    # the worker binary is streamed out and searched with the host's GNU grep: busybox grep (the upstream Alpine
-    # image) drops a match that follows a NUL byte on the same line, and reads nothing from a static binary
-    cp = shell.out(["sh", "-c", f"docker exec {client.name} cat /app/gnosis_vpn-worker | grep -aoE -m1 '/hopr/mix/[0-9.]+'"], timeout=120)
+    # the binaries are streamed out of their containers and searched here, in Python: busybox grep (the upstream
+    # Alpine image) drops a match that follows a NUL byte on the same line, and a shell pipeline would need the
+    # container names quoted
+    cp = _protocol_id(client.name, "/app/gnosis_vpn-worker")
     hv = (shell.out([cfg.hoprd_bin, "--version"], timeout=30) or "unknown").splitlines()[0]
     hp = shell.out(["grep", "-aoE", "-m1", "/hopr/mix/[0-9.]+", cfg.hoprd_bin], timeout=120)
     sv = (shell.out(["docker", "exec", cfg.server, "./gnosis_vpn-server", "--version"], timeout=30) or "unknown").splitlines()[0]
-    sp = shell.out(["sh", "-c", f"docker exec {cfg.server} cat ./gnosis_vpn-server | grep -aoE -m1 '/hopr/mix/[0-9.]+'"], timeout=120)
+    sp = _protocol_id(cfg.server, "./gnosis_vpn-server")
     ci = shell.out(["docker", "inspect", "-f", "{{.Config.Image}} {{.Image}}", client.name], timeout=30)
     si = shell.out(["docker", "inspect", "-f", "{{.Config.Image}} {{.Image}}", cfg.server], timeout=30)
     # an image built with --label org.opencontainers.image.revision=<commit> names its source commit here

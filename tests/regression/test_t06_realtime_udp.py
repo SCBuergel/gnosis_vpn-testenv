@@ -13,7 +13,8 @@ FAIL RECONNECT on any reconnect (the verdict names the count, the tunnel-ping ti
 outage seconds; three timeouts per reconnect means the liveness ping itself is failing); FAIL UNMEASURED when the
 probe sent under SAMPLE_MIN_PCT of the expected RATE*1e6/8/SIZE*duration packets (a probe on a dead session sends
 a handful and still prints a confident percentage: 255 of 4688, "60.78 % loss"); FAIL on no loss figure; FAIL at
-loss >= LOSS_MAX or a gap over STALL_MAX s; PASS otherwise.
+loss >= LOSS_MAX or a gap over STALL_MAX s (counted over the probe's ten longest gaps, so the count is capped at
+ten; any one over the limit fails the arm); PASS otherwise.
 
 Why: the fleet recorded 54-96 % loss at 1.5 Mbit/s on a path whose TCP throughput looked fine. Each arm has its own
 session because arms that shared one were order-dependent (82.7 % then 0.41 %). The after-bulk arm isolates what
@@ -43,9 +44,12 @@ def expected_pkts(rate_mbit, dur, size):
 def check_arm(checks, k, label, rate, dur, j, e):
     """One arm's verdict from the probe JSON j and the log error counters e."""
     loss = j.get("loss_pct")
-    stall = int(j.get("stalls_gt_5s") or 0)
+    # stalls over STALL_MAX, counted over the report's worst_stalls (the ten longest gaps): a gate needs "any stall
+    # over the limit", and ten is enough for that; the probe's fixed stalls_gt_5s bucket would ignore the knob
+    worst_list = [float(g[1]) for g in (j.get("worst_stalls") or []) if len(g) > 1]
+    stall = sum(1 for w in worst_list if w > float(k.STALL_MAX))
     sent = int(j.get("sent") or 0)
-    worst = (j.get("worst_stalls") or [[0, 0]])[0][1] if j.get("worst_stalls") else 0
+    worst = max(worst_list) if worst_list else 0
     p99 = (j.get("delay_over_min_ms") or j.get("rtt_ms") or {}).get("p99")
     exp = expected_pkts(rate, dur, k.SIZE)
     rec = int(e.get("reconnects") or 0)
@@ -72,7 +76,7 @@ def check_arm(checks, k, label, rate, dur, j, e):
     if num(loss) >= k.LOSS_MAX:
         why.append(f"loss {loss}% >= {k.LOSS_MAX}%")
     if stall > 0:
-        why.append(f"{stall} stall(s) over {k.STALL_MAX}s, worst {worst}s")
+        why.append(f"{stall} stall(s) over STALL_MAX={k.STALL_MAX}s (at most ten counted), worst {worst}s")
     if not why:
         return checks.passed(f"{label}: loss {loss}%, worst stall {worst}s, p99 {p99} ms, sample {pct}% of expected, no reconnect")
     return checks.failed(f"{label}: {'; '.join(why)} (p99 {p99} ms, sample {pct}% of expected, no reconnect)")
