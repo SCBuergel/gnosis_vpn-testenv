@@ -8,6 +8,29 @@ CLUSTER_SIZE := env_var_or_default("CLUSTER_SIZE", "3")
 DATA_DIR     := env_var_or_default("DATA_DIR",     "/tmp/hopr-nodes")
 CHAIN_IMAGE  := env_var_or_default("CHAIN_IMAGE",  "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest")
 
+# The PIX deposit pool both ends settle through when PIX is on: `test` (visible secp256k1
+# transfers) or `curvy` (anonymous, through the Curvy deployment `curvy-stack-up` runs next to the
+# cluster). It picks the hoprd binary and the client image together, because the curve each pool
+# settles to is network-wide and never negotiated — see the note on build-cluster. Set by `up-curvy`.
+CLUSTER_PIX_POOL := env_var_or_default("CLUSTER_PIX_POOL", "test")
+HOPRD_PACKAGE    := if CLUSTER_PIX_POOL == "curvy" { "binary-hoprd-pix-curvy-x86_64-linux" } else { "binary-hoprd-pix-test-x86_64-linux" }
+HOPRD_RESULT     := if CLUSTER_PIX_POOL == "curvy" { "result-hoprd-pix-curvy" } else { "result-hoprd" }
+CLIENT_IMAGE     := if CLUSTER_PIX_POOL == "curvy" { "gnosis_vpn-client:pix-curvy" } else { "gnosis_vpn-client" }
+CLIENT_BUILD     := if CLUSTER_PIX_POOL == "curvy" { "docker-build-pix-curvy" } else { "docker-build" }
+
+# The Curvy stack is published on the Docker bridge's gateway, so the host-native nodes and the
+# client container reach it at the same address. Its gateway (relayer, indexer) moves off 3000,
+# which is node-0's API port; Blokli stays on 8080, where the cluster's own chain would be.
+CURVY_GATEWAY_PORT := env_var_or_default("CURVY_GATEWAY_PORT", "3900")
+CURVY_STACK_ENV    := CONFIG_DIR + "/curvy-stack.env"
+
+# The two cluster binaries. Default to what `build-cluster` produces; override to run against
+# binaries built some other way (e.g. `cargo build --release -p hoprd --features strategy-pix-test`
+# plus `-p hoprd-localcluster` in a checkout of another commit). Override them together: the
+# localcluster writes the node configs the hoprd binary then has to accept.
+HOPRD_BIN        := env_var_or_default("HOPRD_BIN",        HOPRD_DIR + "/" + HOPRD_RESULT + "/bin/hoprd")
+LOCALCLUSTER_BIN := env_var_or_default("LOCALCLUSTER_BIN", HOPRD_DIR + "/result-localcluster/bin/hoprd-localcluster")
+
 # Docker network the client container joins to reach the (host-native) localcluster.
 # Fixed subnet so the gateway IP — what the cluster binds/announces its P2P host as — is deterministic.
 DOCKER_NETWORK         := env_var_or_default("DOCKER_NETWORK",         "gnosis-vpn-testenv")
@@ -25,6 +48,11 @@ METRICS_DATA_DIR := env_var_or_default("METRICS_DATA_DIR", "/tmp/hopr-metrics-da
 
 # Session hop count for destinations (0 = direct, 1+ = via relays)
 HOPS := env_var_or_default("HOPS", "1")
+
+# Non-empty starts the localcluster with `--enable-pix` and makes `gen-config` emit a PIX-enabled
+# client config sized to match it. One switch for both ends, because they only work in agreement —
+# see templates/pix-on.toml.tpl. Set by `up-pix`; `system-test-pix` needs it.
+CLUSTER_ENABLE_PIX := env_var_or_default("CLUSTER_ENABLE_PIX", "")
 
 # Log levels for each component (passed as RUST_LOG)
 CLIENT_LOG_LEVEL  := env_var_or_default("CLIENT_LOG_LEVEL",  "warn,gnosis_vpn_root=debug,gnosis_vpn_lib=debug,gnosis_vpn_worker=debug")
@@ -44,6 +72,12 @@ CLIENT_LOG_FILE := env_var_or_default("CLIENT_LOG_FILE", "/tmp/gnosis_vpn-client
 E2E_IMAGE   := env_var_or_default("E2E_IMAGE",   "gnosis_vpn-e2e")
 E2E_OUT_DIR := env_var_or_default("E2E_OUT_DIR", "/tmp/gnosis_vpn-testenv-e2e")
 
+# System-test run: worker user (created by the recipe if missing), its state home (wiped per run),
+# and the runner's RUST_LOG
+SYSTEM_TEST_WORKER_USER := env_var_or_default("SYSTEM_TEST_WORKER_USER", "gnosisvpn")
+SYSTEM_TEST_STATE_DIR   := env_var_or_default("SYSTEM_TEST_STATE_DIR",   "/tmp/gnosis_vpn-testenv-system-tests")
+SYSTEM_TEST_LOG_LEVEL   := env_var_or_default("SYSTEM_TEST_LOG_LEVEL",   "info,gnosis_vpn_root=debug,gnosis_vpn_lib=debug,gnosis_vpn_worker=debug")
+
 # Generated config output dir
 CONFIG_DIR    := env_var_or_default("CONFIG_DIR", "/tmp/gnosis_vpn-testenv")
 TEMPLATES_DIR := justfile_directory() + "/templates"
@@ -57,18 +91,27 @@ default:
 
 # ─── Build ───────────────────────────────────────────────────────────────────
 
+# The node binary is the `pix-test` variant, not the default `binary-hoprd`. gnosis_vpn-client
+# builds edgli with `pix-test`, i.e. `hopr-lib/pix-secp256k1`, and turns PIX on for the main
+# tunnel session by default — while `binary-hoprd` takes hopr-lib's default, `pix-bjj`. The curve
+# is a network-wide invariant that nothing negotiates, so a bjj Exit refuses every session this
+# client opens with `UnacceptablePixParams` ("refusing a client offering a PIX curve suite this
+# node was not built for" in the node log) and no destination ever connects. `hoprd-localcluster`
+# is already built against hoprd's `strategy-pix-test`, so only the node binary was mismatched.
 # Build hoprd and hoprd-localcluster binaries via nix
+# With CLUSTER_PIX_POOL=curvy the node is the `pix-curvy` variant instead, and the client is built
+# with edgli's `pix-curvy` to match.
 build-cluster:
-    nix build -L --out-link {{HOPRD_DIR}}/result-hoprd        {{HOPRD_DIR}}#binary-hoprd
+    nix build -L --out-link {{HOPRD_DIR}}/{{HOPRD_RESULT}} {{HOPRD_DIR}}#{{HOPRD_PACKAGE}}
     nix build -L --out-link {{HOPRD_DIR}}/result-localcluster {{HOPRD_DIR}}#binary-hoprd-localcluster
 
 # Build gnosis_vpn-server Docker image
 build-server:
     cd {{GVPN_SERVER_DIR}} && just docker-build
 
-# Build gnosis_vpn-client Docker image
+# Build gnosis_vpn-client Docker image (the `pix-curvy` variant under CLUSTER_PIX_POOL=curvy)
 build-client:
-    cd {{GVPN_CLIENT_DIR}} && just docker-build
+    cd {{GVPN_CLIENT_DIR}} && just {{CLIENT_BUILD}}
 
 # Build gnosis_vpn-client binaries only (no Docker image) — for the host-native client
 build-client-native:
@@ -94,14 +137,47 @@ network-create:
 network-remove:
     docker network rm "{{DOCKER_NETWORK}}" 2>/dev/null || true
 
+# ─── Curvy stack ─────────────────────────────────────────────────────────────
+
+# Bring up the Curvy deployment a `curvy` pool settles through: chain + Blokli, relayer, indexer,
+# batch prover and gateway, from the release pinned in hoprd's localcluster/curvy. hoprd's launcher
+# does the work (`--stack-only`); what it hands back is the environment the nodes and the client need.
+curvy-stack-up: network-create
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f "{{CURVY_STACK_ENV}}" ] && [ -n "$(docker compose --project-name hopr-curvy-stack ps -q gateway 2>/dev/null)" ]; then
+        echo "Curvy stack already up — skipping (environment in {{CURVY_STACK_ENV}})"
+        exit 0
+    fi
+    mkdir -p "{{CONFIG_DIR}}"
+    log=$(mktemp)
+    CURVY_BIND_ADDR="{{DOCKER_NETWORK_GATEWAY}}" CURVY_GATEWAY_PORT="{{CURVY_GATEWAY_PORT}}" \
+        "{{HOPRD_DIR}}/localcluster/scripts/curvy-localcluster.sh" --stack-only 2>&1 | tee "${log}"
+    env_file=$(sed -n 's/.*environment in \(.*stack\.env\)$/\1/p' "${log}" | tail -1)
+    rm -f "${log}"
+    [ -f "${env_file}" ] || { echo "Error: the Curvy launcher did not report its environment file" >&2; exit 1; }
+    cp "${env_file}" "{{CURVY_STACK_ENV}}"
+    echo "Curvy stack environment saved to {{CURVY_STACK_ENV}}"
+
+# Tear the Curvy stack down (no-op when it is not up)
+curvy-stack-down:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    script="{{HOPRD_DIR}}/localcluster/scripts/curvy-localcluster.sh"
+    if [ -f "{{CURVY_STACK_ENV}}" ] || [ -n "$(docker compose --project-name hopr-curvy-stack ps -aq 2>/dev/null)" ]; then
+        [ -x "${script}" ] && "${script}" --down >/dev/null 2>&1
+        echo "Curvy stack stopped"
+    fi
+    rm -f "{{CURVY_STACK_ENV}}"
+
 # ─── Localcluster ────────────────────────────────────────────────────────────
 
 # Shared start/restart logic for the three cluster-start* variants below: binary checks, skip-if-already-running-on-this-host, restart-if-running-on-a-different-host, spawn.
 _cluster-start p2p_host:
     #!/usr/bin/env bash
     set -euo pipefail
-    lc_bin="{{HOPRD_DIR}}/result-localcluster/bin/hoprd-localcluster"
-    hoprd_bin="{{HOPRD_DIR}}/result-hoprd/bin/hoprd"
+    lc_bin="{{LOCALCLUSTER_BIN}}"
+    hoprd_bin="{{HOPRD_BIN}}"
     if [ ! -f "${lc_bin}" ]; then
         echo "Error: hoprd-localcluster not found at ${lc_bin}" >&2
         echo "Run 'just build-cluster' to build it first" >&2
@@ -118,25 +194,38 @@ _cluster-start p2p_host:
         echo "Cluster is in state 'failed' — run 'just cluster-stop' to clean up before restarting"
         exit 1
     fi
+    if [ -n "{{CLUSTER_ENABLE_PIX}}" ]; then want_pix=yes; pix_flag="--enable-pix"; else want_pix=no; pix_flag=""; fi
     if [ "${cluster_state}" != "not_running" ]; then
         current_host=$(just _cluster-p2p-host)
-        if [ "${current_host}" = "${p2p_host}" ]; then
+        # PIX is written into the node configs at generation time, so a running cluster cannot be
+        # switched into or out of it — checked alongside the host for the same reason.
+        has_pix=$(just _cluster-has-pix)
+        if [ "${current_host}" = "${p2p_host}" ] && [ "${has_pix}" = "${want_pix}" ]; then
             pid=$(pgrep -f hoprd-localcluster | head -1)
-            echo "Cluster found in state '${cluster_state}' (PID ${pid}), already on P2P host ${p2p_host} — skipping start"
+            echo "Cluster found in state '${cluster_state}' (PID ${pid}), already on P2P host ${p2p_host} with PIX ${has_pix} — skipping start"
             exit 0
         fi
-        echo "Cluster is running with P2P host '${current_host}', but this recipe needs '${p2p_host}' — restarting with the correct host"
+        echo "Cluster is running with P2P host '${current_host}' and PIX ${has_pix}, but this recipe needs '${p2p_host}' with PIX ${want_pix} — restarting"
         just cluster-stop
     fi
+    if [ "{{CLUSTER_PIX_POOL}}" = "curvy" ]; then
+        # HOPRD_CHAIN_URL points the cluster at the Curvy chain instead of starting its own (so
+        # --chain-image below goes unused), HOPRD_CURVY_SCOPE_AGGREGATOR has it grant every Safe —
+        # the client's included — the aggregator target a direct shield needs, and the rest reaches
+        # the nodes' Curvy pools as their HOPRD_CURVY_* overrides.
+        [ -f "{{CURVY_STACK_ENV}}" ] || { echo "Error: no Curvy stack — run 'just curvy-stack-up' first" >&2; exit 1; }
+        . "{{CURVY_STACK_ENV}}"
+    fi
     RUST_LOG={{CLUSTER_LOG_LEVEL}} \
-        "{{HOPRD_DIR}}/result-localcluster/bin/hoprd-localcluster" \
-        --hoprd-bin   "{{HOPRD_DIR}}/result-hoprd/bin/hoprd" \
+        "${lc_bin}" \
+        --hoprd-bin   "${hoprd_bin}" \
         --chain-image "{{CHAIN_IMAGE}}" \
         --size        {{CLUSTER_SIZE}} \
         --p2p-host    "${p2p_host}" \
         --data-dir    "{{DATA_DIR}}" \
-        --extra-identities 1 &
-    echo "Localcluster PID: $! (P2P on ${p2p_host})"
+        --extra-identities 1 \
+        ${pix_flag} &
+    echo "Localcluster PID: $! (P2P on ${p2p_host}, PIX ${want_pix})"
 
 # Start localcluster (--extra-identities 1 pre-funds the client identity; P2P binds to the Docker gateway IP)
 cluster-start: network-create
@@ -154,7 +243,7 @@ cluster-start-on-network:
 cluster-wait:
     #!/usr/bin/env bash
     set -euo pipefail
-    lc_bin="{{HOPRD_DIR}}/result-localcluster/bin/hoprd-localcluster"
+    lc_bin="{{LOCALCLUSTER_BIN}}"
     if [ ! -f "${lc_bin}" ]; then
         echo "Error: hoprd-localcluster not found at ${lc_bin}" >&2
         echo "Run 'just build-cluster' to build it first" >&2
@@ -170,7 +259,7 @@ cluster-wait:
 cluster-status:
     #!/usr/bin/env bash
     set -euo pipefail
-    lc_bin="{{HOPRD_DIR}}/result-localcluster/bin/hoprd-localcluster"
+    lc_bin="{{LOCALCLUSTER_BIN}}"
     if [ ! -f "${lc_bin}" ]; then
         echo "Error: hoprd-localcluster not found at ${lc_bin}" >&2
         echo "Run 'just build-cluster' to build it first" >&2
@@ -183,7 +272,7 @@ cluster-stop:
     #!/usr/bin/env bash
     set -euo pipefail
     pkill -f hoprd-localcluster 2>/dev/null || true
-    pkill -f "result-hoprd/bin/hoprd" 2>/dev/null || true
+    pkill -f "result-hoprd[^/]*/bin/hoprd" 2>/dev/null || true
     docker rm -f hopr-chain 2>/dev/null || true
     # cluster recreates state everytime, so we can safely delete it on stop
     rm -rf "{{DATA_DIR}}"
@@ -243,7 +332,7 @@ gen-config:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{CONFIG_DIR}}"
-    lc_bin="{{HOPRD_DIR}}/result-localcluster/bin/hoprd-localcluster"
+    lc_bin="{{LOCALCLUSTER_BIN}}"
 
     status=$("${lc_bin}" status --data-dir "{{DATA_DIR}}")
     blokli_url=$(echo "${status}" | jq -r '.blokli_url')
@@ -259,8 +348,15 @@ gen-config:
         destinations+="${block}"$'\n'
     done < <(echo "${status}" | jq -c '.nodes[]')
 
-    DESTINATIONS="${destinations}" \
-        envsubst '$DESTINATIONS' \
+    # The PIX block has to agree with how the cluster was started, so it comes off the same switch.
+    if [ -n "{{CLUSTER_ENABLE_PIX}}" ]; then
+        pix_section=$(cat "{{TEMPLATES_DIR}}/pix-on.toml.tpl")
+    else
+        pix_section=$(cat "{{TEMPLATES_DIR}}/pix-off.toml.tpl")
+    fi
+
+    DESTINATIONS="${destinations}" PIX_SECTION="${pix_section}" \
+        envsubst '$DESTINATIONS,$PIX_SECTION' \
         < "{{TEMPLATES_DIR}}/client.toml.tpl" \
         > "{{CONFIG_DIR}}/client.toml"
 
@@ -303,6 +399,18 @@ client-start: network-create
     mkdir -p "{{CLIENT_STATE_DIR}}"
     blokli_url=$(cat "{{CONFIG_DIR}}/blokli_url" | sed 's/localhost/host.docker.internal/')
     extra_id_pass=$(cat "{{CONFIG_DIR}}/extra_id.password")
+    # The client's embedded node is the PIX Entry, so under the Curvy pool it needs what the nodes
+    # get: the pool's HOPRD_CURVY_* overrides, and the proving keys it allocates deposits with.
+    curvy_args=()
+    if [ "{{CLUSTER_PIX_POOL}}" = "curvy" ]; then
+        [ -f "{{CURVY_STACK_ENV}}" ] || { echo "Error: no Curvy stack — run 'just curvy-stack-up' first" >&2; exit 1; }
+        . "{{CURVY_STACK_ENV}}"
+        curvy_args=(
+            --env HOPRD_CURVY_SHIELDING --env HOPRD_CURVY_SUBMISSION --env HOPRD_CURVY_RELAYER_URL
+            --env HOPRD_CURVY_NOTE_SOURCE --env HOPRD_CURVY_TOKEN
+            --env CURVY_ZK_KEYS_DIR=/curvy-zk --volume "${CURVY_ZK_KEYS_DIR}:/curvy-zk:ro"
+        )
+    fi
     docker run --detach --rm \
         --name gnosis_vpn-client \
         --network "{{DOCKER_NETWORK}}" \
@@ -318,7 +426,8 @@ client-start: network-create
         --env GNOSISVPN_CLIENT_AUTOSTART=30min \
         --volume "{{CONFIG_DIR}}:/config:ro" \
         --volume "{{CLIENT_STATE_DIR}}:/var/lib/gnosisvpn" \
-        gnosis_vpn-client
+        "${curvy_args[@]}" \
+        "{{CLIENT_IMAGE}}"
     sleep 1
     running=$(docker inspect gnosis_vpn-client 2>/dev/null | jq -r '.[0].State.Running // "false"')
     if [ "${running}" != "true" ]; then
@@ -393,11 +502,23 @@ client-logs-on-host:
     tail -f "{{CLIENT_LOG_FILE}}"
 
 # Purge worker state without prompting (used by down).
-# sudo: the container's entrypoint chowns this bind-mounted dir to its internal
-# worker uid, which may not be removable by the host user without it.
+# Escalates only when it has to. The *container's* entrypoint chowns this bind-mounted dir to its
+# internal worker uid, so the host user cannot remove it afterwards — but when the client ran on the
+# host, or never ran at all, the directory is plainly removable or absent. Asking for a password
+# there failed the whole `down` on a shell without a tty, after everything else had already stopped.
 _purge-state:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -e "{{CLIENT_STATE_DIR}}" ]; then
+        echo "{{CLIENT_STATE_DIR}} does not exist — nothing to purge"
+        exit 0
+    fi
+    if rm -rf "{{CLIENT_STATE_DIR}}" 2>/dev/null; then
+        echo "Purged {{CLIENT_STATE_DIR}}"
+        exit 0
+    fi
     sudo rm -rf "{{CLIENT_STATE_DIR}}"
-    echo "Purged {{CLIENT_STATE_DIR}}"
+    echo "Purged {{CLIENT_STATE_DIR}} (needed sudo)"
 
 # Remove all persistent worker state (identity keys, cache) from CLIENT_STATE_DIR
 purge-state:
@@ -413,29 +534,101 @@ purge-state:
 
 # ─── System tests ────────────────────────────────────────────────────────────
 
+# Runs the client's system-test binary directly instead of delegating to gnosis_vpn-client's own
+# `system-tests` recipe: that recipe targets a *deployed* network, picking config and Blokli URL
+# from a checked-in `gnosis_vpn-system_tests/networks/<name>/` fixture selected by
+# SYSTEM_TEST_NETWORK. A localcluster has neither — its destinations, identity and Blokli URL are
+# generated fresh by `gen-config` on every run — so the artifacts and the worker-user setup are
+# staged here. Everything the runner itself needs is the same; only where it comes from differs.
+# Full tunnel: while it runs, this machine's traffic egresses through the exit under test.
 # Run gnosis_vpn-client system tests against the live local stack
-system-tests:
+system-tests *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    for artifact in client.toml extra_id.id extra_id.password extra_id.safe blokli_url; do
+    for artifact in client.toml extra_id.id extra_id.password blokli_url; do
         if [ ! -f "{{CONFIG_DIR}}/${artifact}" ]; then
             echo "Missing {{CONFIG_DIR}}/${artifact} — run 'just gen-config' first" >&2
             exit 1
         fi
     done
 
-    worker_binary="{{GVPN_CLIENT_DIR}}/result/bin/gnosis_vpn-worker"
-    if [ ! -f "${worker_binary}" ]; then
-        echo "Missing ${worker_binary} — run 'just build-client' first" >&2
+    # The runner brings up its own client on `extra_id.id` — the same identity `client-start` hands
+    # the container. Two nodes sharing one chain key announce the same peer twice and fight over the
+    # Safe, so the container has to be down first. (`up` starts it; use the recipes it composes.)
+    if docker container inspect gnosis_vpn-client > /dev/null 2>&1; then
+        echo "The gnosis_vpn-client container is running — it holds the same HOPR identity this" >&2
+        echo "test needs. Stop it first: just client-stop" >&2
         exit 1
     fi
 
-    SYSTEM_TEST_HOPRD_ID=$(cat "{{CONFIG_DIR}}/extra_id.id") \
-    SYSTEM_TEST_HOPRD_ID_PASSWORD=$(cat "{{CONFIG_DIR}}/extra_id.password") \
-    SYSTEM_TEST_SAFE=$(cat "{{CONFIG_DIR}}/extra_id.safe") \
-    SYSTEM_TEST_CONFIG=$(cat "{{CONFIG_DIR}}/client.toml") \
-    SYSTEM_TEST_WORKER_BINARY="${worker_binary}" \
-        just -d "{{GVPN_CLIENT_DIR}}" -f "{{GVPN_CLIENT_DIR}}/justfile" system-tests
+    # Resolved through the symlink, so what the unprivileged worker user is handed is the
+    # world-readable /nix/store path rather than one under someone's home directory.
+    root_binary=$(readlink -f "{{GVPN_CLIENT_DIR}}/result/bin/gnosis_vpn-root"   2>/dev/null || true)
+    worker_binary=$(readlink -f "{{GVPN_CLIENT_DIR}}/result/bin/gnosis_vpn-worker" 2>/dev/null || true)
+    if [ ! -x "${root_binary}" ] || [ ! -x "${worker_binary}" ]; then
+        echo "Missing client binaries in {{GVPN_CLIENT_DIR}}/result/bin — run 'just build-client' first" >&2
+        exit 1
+    fi
+
+    # Its own flake output — `binary-gnosis_vpn-x86_64-linux` ships root/worker/ctl only.
+    nix build -L --out-link "{{GVPN_CLIENT_DIR}}/result-system-tests" \
+        "{{GVPN_CLIENT_DIR}}#binary-gnosis_vpn-system_tests"
+    test_binary="{{GVPN_CLIENT_DIR}}/result-system-tests/bin/gnosis_vpn-system_tests"
+
+    blokli_url=$(cat "{{CONFIG_DIR}}/blokli_url")
+    identity_pass=$(cat "{{CONFIG_DIR}}/extra_id.password")
+
+    # Name the resolved target up front, so a failed run does not need this recipe to explain itself
+    echo "=== system test target ==="
+    echo "  blokli:      ${blokli_url}"
+    grep -o '^\[destinations\.[^]]*\]' "{{CONFIG_DIR}}/client.toml" | sed 's/^/  destination: /' || true
+    echo "  config:      {{CONFIG_DIR}}/client.toml"
+    echo "  root:        ${root_binary}"
+    echo "  worker:      ${worker_binary}"
+    echo "  runner:      $(readlink -f "${test_binary}")"
+    echo "  worker user: {{SYSTEM_TEST_WORKER_USER}}"
+    echo "  state home:  {{SYSTEM_TEST_STATE_DIR}}"
+    echo "=========================="
+
+    # Refresh the sudo credential timestamp so the long run below doesn't hit a prompt later
+    sudo -v
+
+    if ! getent passwd "{{SYSTEM_TEST_WORKER_USER}}" > /dev/null 2>&1; then
+        # No home of its own: the state directory is handed over explicitly via GNOSISVPN_HOME below.
+        sudo useradd --system --user-group --no-create-home \
+            --home-dir "{{SYSTEM_TEST_STATE_DIR}}" "{{SYSTEM_TEST_WORKER_USER}}"
+        echo "Created system user {{SYSTEM_TEST_WORKER_USER}}"
+    fi
+
+    # `cluster-stop` wipes DATA_DIR and the chain container, so every cluster comes up with a new
+    # chain: a state home from an earlier run caches a Safe address that no longer exists on it.
+    # Wiped rather than reused, which is why this is a dedicated directory and not CLIENT_STATE_DIR.
+    sudo rm -rf "{{SYSTEM_TEST_STATE_DIR}}"
+    sudo mkdir -p "{{SYSTEM_TEST_STATE_DIR}}"
+    sudo chown "{{SYSTEM_TEST_WORKER_USER}}:{{SYSTEM_TEST_WORKER_USER}}" "{{SYSTEM_TEST_STATE_DIR}}"
+
+    # sudo's env_reset drops the environment, so every variable the spawned gnosis_vpn-root needs
+    # is restated here as an assignment on the command line.
+    sudo \
+        CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${root_binary}" \
+        GNOSISVPN_CONFIG_PATH="{{CONFIG_DIR}}/client.toml" \
+        GNOSISVPN_HOME="{{SYSTEM_TEST_STATE_DIR}}" \
+        GNOSISVPN_WORKER_USER="{{SYSTEM_TEST_WORKER_USER}}" \
+        GNOSISVPN_WORKER_BINARY="${worker_binary}" \
+        GNOSISVPN_HOPR_IDENTITY_FILE="{{CONFIG_DIR}}/extra_id.id" \
+        GNOSISVPN_HOPR_IDENTITY_PASS="${identity_pass}" \
+        RUST_LOG="{{SYSTEM_TEST_LOG_LEVEL}}" \
+        "${test_binary}" --blokliUrl "${blokli_url}" {{ARGS}}
+
+# Drive a full PIX deposit → key recovery → sweep cycle and assert the exit's income (see pix/run.sh)
+system-test-pix *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LOCALCLUSTER_BIN="{{LOCALCLUSTER_BIN}}" \
+    DATA_DIR="{{DATA_DIR}}" \
+    CONFIG_DIR="{{CONFIG_DIR}}" \
+    CLIENT_CONTAINER="gnosis_vpn-client" \
+        "{{justfile_directory()}}/pix/run.sh" {{ARGS}}
 
 # ─── End-to-end tests ────────────────────────────────────────────────────────
 
@@ -564,6 +757,18 @@ metrics-stop:
 # Bring the full stack up, including the client container
 up: build metrics-start cluster-start cluster-wait server-start gen-config client-start
     @just summary
+
+# Re-invoked rather than composed, because CLUSTER_ENABLE_PIX has to be set before `up`'s
+# dependencies are evaluated — it steers both the cluster flag and which PIX block gen-config emits.
+# Bring the full stack up with PIX enabled end to end (see pix/run.sh)
+up-pix:
+    CLUSTER_ENABLE_PIX=1 just up
+
+# `up-pix` against the Curvy pool: the Curvy stack comes up first, and the cluster runs on its chain.
+# Bring the full stack up with PIX settling through Curvy (see pix/run.sh)
+up-curvy:
+    CLUSTER_ENABLE_PIX=1 CLUSTER_PIX_POOL=curvy just build metrics-start curvy-stack-up cluster-start cluster-wait server-start gen-config client-start
+    @CLUSTER_ENABLE_PIX=1 CLUSTER_PIX_POOL=curvy just summary
 
 # See the caveat on client-start-on-host before using this instead of `up`
 # Bring the full stack up with the client running natively on the host instead of in Docker
@@ -695,8 +900,16 @@ _lan-ip:
 _cluster-p2p-host:
     #!/usr/bin/env bash
     set -euo pipefail
-    "{{HOPRD_DIR}}/result-localcluster/bin/hoprd-localcluster" status --data-dir "{{DATA_DIR}}" 2>/dev/null \
+    "{{LOCALCLUSTER_BIN}}" status --data-dir "{{DATA_DIR}}" 2>/dev/null \
         | jq -r '.nodes[0].p2p // empty' | sed -n 's/:[0-9]*$//p'
+
+# "yes"/"no" — whether the cluster's generated node configs carry a PIX strategy. Read off the
+# config on disk rather than the status JSON, which does not report it; `--enable-pix` is baked in
+# at generation time, so a running cluster cannot be switched either way.
+_cluster-has-pix:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if grep -qE '^\s+- Pix:' "{{DATA_DIR}}/hoprd_cfg_0.yaml" 2>/dev/null; then echo yes; else echo no; fi
 
 # Print <name>'s checked-out branch and commit, plus tag if HEAD is exactly tagged
 _component-version name dir:
@@ -718,7 +931,7 @@ _component-version name dir:
     fi
 
 # Tear the full stack down and purge client state (cluster always restarts with new identities)
-down: client-stop server-stop cluster-stop metrics-stop _purge-state
+down: client-stop server-stop cluster-stop curvy-stack-down metrics-stop _purge-state
 
 # Remove all generated configs, data, logs, chain container, and nix build results
 clean:
