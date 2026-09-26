@@ -20,3 +20,5 @@ address = "10.129.0.1"
 # auto-generated /etc/resolv.conf and aborts the whole `up` — skip it entirely
 [wireguard]
 dns = { overwrite = false }
+
+${PIX_SECTION}
