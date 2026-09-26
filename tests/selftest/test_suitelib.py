@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from suitelib import tomlcfg  # noqa: E402
-from suitelib.client import count_log_errors, telemetry_sum  # noqa: E402
+from suitelib.client import count_log_errors, sidecar_mount_issues, telemetry_sum  # noqa: E402
 from suitelib.config import Config, q  # noqa: E402
 from suitelib.verdicts import Checks, RunDir  # noqa: E402
 from suitelib.stats import p95, stats  # noqa: E402
@@ -219,3 +219,15 @@ def test_node_sampler_keeps_empty_slots_positional(tmp_path):
     for r in rows:
         assert len(r["nodes"]) == 2 and r["nodes"][0] == {}          # node0: empty url, empty sample, slot kept
         assert "node0" not in r["cpu_pct"] and "node1" in r["cpu_pct"]  # node1's cpu stays under node1
+
+
+def test_sidecar_mount_issues(tmp_path):
+    tests, out = tmp_path / "tests", tmp_path / "runs"
+    tests.mkdir(); out.mkdir()
+    fits = {"/suite": str(tests), "/suite-out": str(out)}
+    assert sidecar_mount_issues(fits, tests, out) == []
+    other = tmp_path / "elsewhere"; other.mkdir()
+    wrong = sidecar_mount_issues({"/suite": str(tests), "/suite-out": str(other)}, tests, out)
+    assert len(wrong) == 1 and wrong[0].startswith("/suite-out is ") and str(out) in wrong[0]
+    assert sidecar_mount_issues({}, tests, out) == ["/suite is not mounted", "/suite-out is not mounted"]
+    assert sidecar_mount_issues(None, tests, out) == ["/suite is not mounted", "/suite-out is not mounted"]

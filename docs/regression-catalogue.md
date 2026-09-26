@@ -57,7 +57,7 @@ Every number a gate holds a measurement against is absolute and named; nothing i
 
 ### T01-topology-preconditions · **gate** · preflight
 
-Cluster, channels, relay forwarding, client readiness, both liveness-ping targets, no leftover impairment. FAIL aborts the run. `FWD_TIMEOUT`=20 s, `READY_TIMEOUT`=300 s, `CLIENT_CHANNEL_TIMEOUT`=240 s, `PERIODIC_PING_TARGET`=10.128.0.1. PASS iff cluster `running`, every node `channels_open` with ≥ `CLUSTER_SIZE`−1 outgoing `Open` channels, a 1-hop session from node 0 through every other node within `FWD_TIMEOUT`, client worker online within 120 s, `DEST` Ready within `READY_TIMEOUT`, client channel within `CLIENT_CHANNEL_TIMEOUT`, both ping targets on the server's `wggvpn`, no `netem` qdisc. WARN: another destination not Ready, an armed timer. Effective config recorded.
+Cluster, channels, relay forwarding, client readiness, both liveness-ping targets, no leftover impairment. FAIL aborts the run. `FWD_TIMEOUT`=20 s, `READY_TIMEOUT`=300 s, `CLIENT_CHANNEL_TIMEOUT`=240 s, `PERIODIC_PING_TARGET`=10.128.0.1. PASS iff cluster `running`, every node `channels_open` with ≥ `CLUSTER_SIZE`−1 outgoing `Open` channels, a 1-hop session from node 0 through every other node within `FWD_TIMEOUT`, client worker online within 120 s, `DEST` Ready within `READY_TIMEOUT`, client channel within `CLIENT_CHANNEL_TIMEOUT`, both ping targets on the server's `wggvpn`, the traffic target answering `/health` from the host, every running client's tools sidecar running with `/suite` and `/suite-out` mounted from this run's tests directory and `SUITE_OUT_DIR`, no `netem` qdisc. WARN: another destination not Ready, an armed timer, an unreachable external target. Effective config recorded.
 
 ### T02-build-provenance · **gate** · preflight
 

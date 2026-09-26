@@ -4,7 +4,9 @@ client worker, for DEST to be Ready and for the client's own outgoing channel, c
 against the server's wggvpn addresses, checks that the traffic target is running and answers /health from the host
 (it runs with --rm and no restart policy, so a dead one is a missing container; an external --no-cluster target the
 host cannot reach is a WARN), and looks for leftover netem qdiscs and suite timers on the host. Every
-running client container (up to sixteen, not only those the selection will touch) must have its tools sidecar: a
+running client container (up to sixteen, not only those the selection will touch) must have its tools sidecar, with
+/suite and /suite-out mounted from this run's tests directory and SUITE_OUT_DIR (a sidecar started under another
+SUITE_OUT_DIR writes every probe report where pytest never looks, it18b): a
 client without one is a mis-started stack; with --no-cluster it is a WARN. The effective client config is recorded
 against the shipped defaults, not asserted. A FAIL aborts the run: a number
 measured through a broken precondition looks like a finding.
@@ -25,7 +27,7 @@ import re
 import time
 import urllib.request
 
-from suitelib.client import clients_running
+from suitelib.client import clients_running, sidecar_mount_issues
 from suitelib.target import Target
 from suitelib import shell
 
@@ -87,6 +89,11 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
     for c in clients_running(cfg, run):
         if c.tools_exists():
             checks.passed(f"{c.name}: tools sidecar {c.tools} running")
+            # started under another SUITE_OUT_DIR or tests dir, the sidecar's probe reports and scripts miss this run
+            issues = sidecar_mount_issues(c.tools_mounts(), cfg.testenv_dir / "tests", cfg.out_dir)
+            if issues:
+                checks.failed(f"{c.name}: tools sidecar {c.tools} mounts do not fit this run: " + "; ".join(issues)
+                              + " (restart the client with `just client-start` under this SUITE_OUT_DIR)")
         elif cfg.no_cluster:
             checks.warn(f"{c.name}: no tools sidecar {c.tools}; commands run in the client container (--no-cluster)")
         else:

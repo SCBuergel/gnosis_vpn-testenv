@@ -2,6 +2,7 @@
 disconnect with an armed deadman, client-log error counters, telemetry, log slices, in-container helpers."""
 import atexit
 import json
+from pathlib import Path
 import os
 import re
 import signal
@@ -82,6 +83,22 @@ def telemetry_sum(text, name):
     return int(tot) if tot == int(tot) else tot
 
 
+def sidecar_mount_issues(mounts, tests_dir, out_dir):
+    """Why a tools sidecar's mounts do not fit this run: /suite must be the suite's tests directory and /suite-out
+    the run's SUITE_OUT_DIR, both resolved. A sidecar started under one SUITE_OUT_DIR and a suite run under another
+    (it18b, 2026-09-26: env.sh not sourced) sends every probe report into a directory pytest never reads; the test
+    then prints None for loss and stalls with no error. Returns a list of one-line complaints, empty when it fits."""
+    want = {"/suite": Path(tests_dir), "/suite-out": Path(out_dir)}
+    issues = []
+    for dest, path in want.items():
+        have = (mounts or {}).get(dest)
+        if have is None:
+            issues.append(f"{dest} is not mounted")
+        elif Path(have).resolve() != path.resolve():
+            issues.append(f"{dest} is {have}, this run uses {path}")
+    return issues
+
+
 class Session:
     """A connected tunnel: connect_ms, since (a docker --since stamp taken before the connect), iface.
     Leaving the `with` block disconnects."""
@@ -129,6 +146,14 @@ class Client:
 
     def tools_exists(self):
         return shell.ok(["docker", "container", "inspect", self.tools], timeout=30)
+
+    def tools_mounts(self):
+        """{destination: source} of the sidecar's bind mounts, or None when it cannot be inspected."""
+        raw = shell.out(["docker", "container", "inspect", "--format", "{{json .Mounts}}", self.tools], timeout=30, default="")
+        try:
+            return {m["Destination"]: m["Source"] for m in json.loads(raw)}
+        except (ValueError, TypeError, KeyError):
+            return None
 
     def _shell_target(self):
         """Where shell commands run: the tools sidecar (curl, ping, ip, python; the client's network namespace).
