@@ -9,6 +9,7 @@ is reported next to, not inside, the loss figure. The local port is kept across 
 us does not change. An empty iface means an unbound socket (loopback self-tests).
 
 The 8 MB socket buffers are the same choice as on the target side, for the reason given in docker/target/udpserver.py."""
+import math
 import socket
 import threading
 import time
@@ -136,8 +137,10 @@ class TunnelSocket:
 
 def pct_ms(values, p):
     """The p-quantile (0..1) of values in seconds, as rounded milliseconds; None when empty."""
+    # nearest-rank quantile: the ceil(p*n)-th smallest sample (p=1 is the max); the same one line lives in
+    # docker/target/udpserver.py and tests/suitelib/stats.py (this file cannot import them), keep the three equal
     v = sorted(values)
-    return round(v[min(len(v) - 1, int(p * len(v)))] * 1000, 1) if v else None
+    return round(v[max(0, math.ceil(p * len(v)) - 1)] * 1000, 1) if v else None
 
 
 def quantiles_ms(values):

@@ -1,4 +1,5 @@
 """Small numeric helpers shared by the tests."""
+import math
 import statistics as st
 
 
@@ -25,8 +26,10 @@ def stats(values):
 
 def pct(values, p):
     """The p-quantile (0..1) of values by rank, or None when empty."""
+    # nearest-rank quantile: the ceil(p*n)-th smallest sample (p=1 is the max); the same one line lives in
+    # docker/target/udpserver.py and tests/probes/probelib.py (they cannot import this), keep the three equal
     v = sorted(floats(values))
-    return v[min(len(v) - 1, int(p * len(v)))] if v else None
+    return v[max(0, math.ceil(p * len(v)) - 1)] if v else None
 
 
 def p95(values):

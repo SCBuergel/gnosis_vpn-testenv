@@ -1,4 +1,5 @@
 """Shared by the three UDP target services (callecho, streamsrv, callsrv)."""
+import math
 import socket
 
 BUF = 8 << 20
@@ -17,8 +18,11 @@ def bind_udp(port, host="0.0.0.0"):
 
 
 def pct_ms(values, p):
+    """The p-quantile (0..1) of values in seconds, as rounded milliseconds; None when empty."""
+    # nearest-rank quantile: the ceil(p*n)-th smallest sample (p=1 is the max); the same one line lives in
+    # tests/probes/probelib.py and tests/suitelib/stats.py (this file cannot import them), keep the three equal
     v = sorted(values)
-    return round(v[min(len(v) - 1, int(p * len(v)))] * 1000, 1) if v else None
+    return round(v[max(0, math.ceil(p * len(v)) - 1)] * 1000, 1) if v else None
 
 
 def quantiles_ms(values):

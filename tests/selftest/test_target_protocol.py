@@ -99,6 +99,9 @@ def test_unbound_socket_when_iface_empty():
     ts.finish()
     assert ts.summary()["rebinds"] == 0 and ts.summary()["outages"] == []
     assert probelib.pct_ms([0.1, 0.2, 0.3], 0.5) == 200.0 and probelib.over_min([0.3, 0.1]) == pytest.approx([0.2, 0.0])
+    # nearest-rank, the same line as stats.pct and the target's udpserver: n=4 at p=0.5 is the 2nd smallest
+    assert probelib.pct_ms([0.1, 0.2, 0.3, 0.4], 0.5) == 200.0 and probelib.pct_ms([0.1, 0.2, 0.3, 0.4, 0.5], 0.5) == 300.0
+    assert probelib.pct_ms([0.1, 0.2, 0.3, 0.4], 0.95) == 400.0 and probelib.pct_ms([0.4, 0.1], 1.0) == 400.0 and probelib.pct_ms([], 0.5) is None
     assert probelib.stall_stats([(1.0, 6.0), (2.0, 1.5)])["stalls_gt_5s"] == 1
 
 

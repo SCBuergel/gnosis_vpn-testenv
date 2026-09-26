@@ -11,7 +11,7 @@ from suitelib import tomlcfg  # noqa: E402
 from suitelib.client import count_log_errors, sidecar_mount_issues, telemetry_sum  # noqa: E402
 from suitelib.config import Config, q  # noqa: E402
 from suitelib.verdicts import Checks, RunDir  # noqa: E402
-from suitelib.stats import p95, stats  # noqa: E402
+from suitelib.stats import p95, pct, stats  # noqa: E402
 from suitelib.target import _curl_result  # noqa: E402
 
 
@@ -35,7 +35,16 @@ def test_stats_ignores_na():
 
 
 def test_p95_by_rank():
-    assert p95(list(range(1, 101))) == 96
+    # nearest-rank: the ceil(0.95 * 100) = 95th smallest of 1..100 (the floor definition read 96 here)
+    assert p95(list(range(1, 101))) == 95
+
+
+def test_pct_nearest_rank_small_n():
+    # where nearest-rank and the old int(p*n) index differ: p*n an integer (n=4, p=0.5: 2nd smallest, not 3rd)
+    assert pct([1, 2, 3, 4], 0.5) == 2 and pct([1, 2, 3, 4, 5], 0.5) == 3
+    assert pct([1, 2, 3, 4], 0.95) == 4 and pct([1, 2, 3, 4, 5], 0.95) == 5
+    assert pct(list(range(1, 21)), 0.95) == 19 and pct([7], 0.95) == 7 and pct([3, 1, 2], 1.0) == 3
+    assert pct([], 0.5) is None
 
 
 def test_row_writes_one_json_line(rundir):

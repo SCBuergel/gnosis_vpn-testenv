@@ -16,7 +16,7 @@ import callecho
 import main
 import speedtarget
 import streamsrv
-from udpserver import bind_udp
+from udpserver import bind_udp, pct_ms
 
 
 def _udp_service(serve, **kw):
@@ -135,3 +135,9 @@ def test_main_exits_when_a_service_dies(monkeypatch):
     with pytest.raises(SystemExit) as e:
         main.main()
     assert e.value.code == 1
+
+
+def test_pct_ms_nearest_rank():
+    # the same nearest-rank line as tests/probes/probelib.py and tests/suitelib/stats.py: n=4 at p=0.5 is the 2nd smallest
+    assert pct_ms([0.1, 0.2, 0.3, 0.4], 0.5) == 200.0 and pct_ms([0.1, 0.2, 0.3, 0.4, 0.5], 0.5) == 300.0
+    assert pct_ms([0.1, 0.2, 0.3, 0.4], 0.95) == 400.0 and pct_ms([0.4, 0.1], 1.0) == 400.0 and pct_ms([], 0.5) is None
