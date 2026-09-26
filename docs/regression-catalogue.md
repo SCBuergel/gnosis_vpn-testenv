@@ -73,7 +73,7 @@ One session; `REPS` cycles of download-then-upload at each of `SIZES_MIB`="1 10 
 
 ### T05-loaded-latency · **gate** · throughput
 
-In-tunnel RTT idle, under a saturating download and a saturating upload, `PHASE_S`=30 s (15; 8) each; then `PARALLEL`="1 3 6" ("1 3" very-fast) concurrent downloads of `BYTES`. PASS iff p95 ≤ `DOWN_P95_MAX_MS`=1500 and ≤ `UP_P95_MAX_MS`=2500, every parallel flow completes within `CAP`, and no rung's aggregate (bytes received over wall time) falls below 0.8 × the previous rung's.
+In-tunnel RTT idle, under a saturating download and a saturating upload, `PHASE_S`=30 s (15; 8) each; then `PARALLEL`="1 3 6" ("1 3" very-fast) concurrent downloads of `BYTES`. PASS iff p95 ≤ `DOWN_P95_MAX_MS`=1500 and ≤ `UP_P95_MAX_MS`=2500, every parallel flow completes within `CAP` (a rung with an incomplete flow fails naming the count, the bytes and the session counters: reconnects, tunnel-ping timeouts, discards, reassembly failures), and no rung's aggregate (bytes received over wall time) falls below 0.8 × the previous rung's. The session's log slice is saved as `t05.log`.
 
 ### T06-realtime-udp · **gate** · realtime
 
@@ -133,7 +133,7 @@ Client 1 downloads `BYTES` with client 2 idle, then with client 2 fetching `TRIC
 
 ### T20-fault-injection · *diagnostic* · resilience
 
-During a call: `tc netem` loss over `LOSSES`="1 5 20" % ("5" very-fast) toward relay `RELAY`=1, `STEP_S`=60 s (30; 12) per step, then SIGSTOP for `STEP_S`, then restore. WARN when a rung was not applied; otherwise PASS iff the client is still connected at the end (a miss is WARN). SKIP without root, without a relay pid, or when a qdisc cannot be installed.
+During a call: `tc netem` loss over `LOSSES`="1 5 20" % ("5" very-fast) toward relay `RELAY`=1, `STEP_S`=60 s (30; 12) per step, then SIGSTOP for `STEP_S`, then restore, 2 × `STEP_S` of settle and a `WATCHDOG_S`=90 s window (three liveness-ping cycles, the watchdog's decision time). WARN when a rung was not applied; otherwise PASS iff the client is still connected with no watchdog reconnect at the end of the window; a reconnect inside it or a lost session is WARN, naming the reconnects and the tunnel-ping timeouts. Counters and status are read after the window, never before (full-rebased-1's T20 read them 17 s before the watchdog fired). SKIP without root, without a relay pid, or when a qdisc cannot be installed.
 
 ### T21-passive-observer · *diagnostic* · multiclient
 

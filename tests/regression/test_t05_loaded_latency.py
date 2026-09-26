@@ -6,8 +6,10 @@ path alone. Runs fifth, right after the throughput reference, because loaded RTT
 tests measures accumulated host load.
 
 Pass iff loaded p95 <= DOWN_P95_MAX_MS in the download phase and <= UP_P95_MAX_MS in the upload phase; every
-parallel flow completes within CAP (a rung with an incomplete flow fails naming the count and bytes); and no rung's
-aggregate falls below 0.8 x the previous rung's. Until 2026-09-20 the aggregate was N x BYTES over wall time, so
+parallel flow completes within CAP (a rung with an incomplete flow fails naming the count, the bytes and the session
+counters: reconnects, tunnel-ping timeouts, discards, reassembly failures); and no rung's aggregate falls below 0.8 x
+the previous rung's. The session's log slice is saved as t05.log (full-rebased-1's six-flow stall left no log and
+no counters behind, so its attribution rested on the load shape alone). Until 2026-09-20 the aggregate was N x BYTES over wall time, so
 a capped flow still counted as delivered and three runs read exactly the cap (5.33 Mbit/s at N=6).
 Calibration: three full runs measured download p95 359, 537, 1076 ms and upload p95 1124, 1153, 1746 ms; the
 fleet's bufferbloat finding was 2-4 s.
@@ -67,10 +69,16 @@ def test_loaded_latency(cfg, client, target, checks, knobs):
                     agg_ok = False
                 prev = agg
             checks.log(f"parallel {n} downloads: {agg} Mbit/s aggregate, {done}/{n} complete")
+        errs = s.errors()
+        s.save_log("t05")
     dp, up = p95(dl), p95(ul)
-    checks.record(f"idle p50 {i_s.get('median')} ms; download p95 {dp} ms; upload p95 {up} ms; parallel aggregate non-decreasing={int(agg_ok)}")
+    counters = (f"reconnects {errs['reconnects']} (tunnel-ping timeouts {errs['ping_timeouts']}), discards {errs['frame_discarded']}, "
+                f"reassembly {errs['reassembly_failed']}")
+    checks.row(kind="summary", errors=errs, incomplete=incomplete, agg_ok=agg_ok)
+    checks.record(f"idle p50 {i_s.get('median')} ms; download p95 {dp} ms; upload p95 {up} ms; parallel aggregate non-decreasing={int(agg_ok)}; "
+                  f"session {counters}")
     if incomplete:
-        checks.failed("parallel flows stalled: " + "; ".join(incomplete))
+        checks.failed("parallel flows stalled: " + "; ".join(incomplete) + f"; session {counters}")
     elif agg_ok:
         checks.passed(f"every parallel flow completed and the aggregate does not fall as N rises over [{k.PARALLEL}]")
     else:

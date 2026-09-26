@@ -7,8 +7,12 @@ and SKIP naming the step when a tc qdisc or filter cannot be installed (an unimp
 pass).
 
 Each rung's 'tc qdisc change' is checked and recorded (applied per row); WARN when the session survived but a rung
-was not applied. Otherwise PASS iff the client is still connected after the ladder and the pause; a miss is WARN.
-Call loss, stalls and reconnects are recorded.
+was not applied. Otherwise PASS iff the client is still connected, with no watchdog reconnect, after the ladder, the
+pause, 2 x STEP_S of restore and a further WATCHDOG_S window (three liveness-ping cycles are about 75 s, the
+watchdog's decision time; 90 leaves a margin for the cycle that is already under way when the window opens: in
+full-rebased-1 it reconnected 17 s after the restore wait, after the counters had been read as 0); a
+reconnect inside the window or a lost session is WARN, naming the reconnects and the tunnel-ping timeouts. The
+counters and the status are read after the window, never before it. Call loss, stalls and reconnects are recorded.
 
 Why: T09 varies latency and membership between sessions; nothing else touches a fault arriving mid-session, the
 real-world case. Upstream documents it as hazardous both ways: killing a return relay can collapse even a 0-hop
@@ -24,8 +28,8 @@ from suitelib.config import q
 TEST = "T20-fault-injection"
 KIND = "diagnostic"
 GROUP = "resilience"
-KNOBS = dict(LOSSES="1 5 20", STEP_S=q(60, 30), RELAY=1)
-TIMEOUT = lambda k: (len(k.words("LOSSES")) + 5) * k.STEP_S + 900   # seconds; the harness fails the test past this
+KNOBS = dict(LOSSES="1 5 20", STEP_S=q(60, 30), RELAY=1, WATCHDOG_S=90)
+TIMEOUT = lambda k: (len(k.words("LOSSES")) + 5) * k.STEP_S + k.WATCHDOG_S + 900   # seconds; the harness fails the test past this
 
 
 def test_fault_injection(cfg, run, client, live_cluster, target, checks, knobs):
@@ -81,21 +85,32 @@ def test_fault_injection(cfg, run, client, live_cluster, target, checks, knobs):
             os.kill(relay_pid, signal.SIGCONT)
             checks.row(arm="restore", t=int(time.time()))
             time.sleep(k.STEP_S * 2)
-            e = s.errors()
+            # The watchdog decides over three liveness-ping cycles (~75 s); a fault the ladder caused can still
+            # reconnect the session after the restore wait (full-rebased-1: reconnect 17 s after it, with the counters
+            # already read and saying 0). Poll through WATCHDOG_S, then read the counters and the status once, after.
+            deadline = time.time() + k.WATCHDOG_S
+            still, e = client.is_connected(), s.errors()
+            while still and not e["reconnects"] and time.time() < deadline:
+                time.sleep(15)   # each turn re-reads the log slice; six reads over the window
+                still, e = client.is_connected(), s.errors()
             s.save_log("t20")
-            still = client.is_connected()
             for _ in range(30):   # the probe writes its report at the end of its duration
                 if (run / "t20-call.json").exists() and (run / "t20-call.json").stat().st_size > 0:
                     break
                 time.sleep(1)
         j = run.read_json("t20-call.json", {})
-        checks.row(kind="summary", call=j, errors=e, session_survived=still, relay=k.RELAY, port=port)
-        if still and not all(applied):
+        survived = still and not e["reconnects"]
+        checks.row(kind="summary", call=j, errors=e, session_survived=survived, connected_after=still, relay=k.RELAY, port=port)
+        if survived and not all(applied):
             checks.failed(f"session survived, but {applied.count(False)} of {len(applied)} loss rungs were not applied; the ladder was not the one configured")
-        elif still:
-            checks.passed(f"session survived loss ladder [{k.LOSSES}]% and a {k.STEP_S}s relay pause; call loss {j.get('loss_pct')}%, "
-                          f"stalls>5s {j.get('stalls_gt_5s')}, reconnects {e['reconnects']}")
+        elif survived:
+            checks.passed(f"session survived loss ladder [{k.LOSSES}]% and a {k.STEP_S}s relay pause and {k.WATCHDOG_S}s after; call loss "
+                          f"{j.get('loss_pct')}%, stalls>5s {j.get('stalls_gt_5s')}, reconnects 0 (tunnel-ping timeouts {e['ping_timeouts']})")
+        elif e["reconnects"]:
+            checks.failed(f"session did not survive: the watchdog reconnected {e['reconnects']}x within {k.WATCHDOG_S}s of the restore wait "
+                          f"(tunnel-ping timeouts {e['ping_timeouts']}); call loss {j.get('loss_pct')}%, stalls>5s {j.get('stalls_gt_5s')}; "
+                          f"connected afterwards: {still}")
         else:
-            checks.failed(f"session died during fault injection (reconnects {e['reconnects']})")
+            checks.failed(f"session died during fault injection (reconnects {e['reconnects']}, tunnel-ping timeouts {e['ping_timeouts']})")
     finally:
         cleanup()
