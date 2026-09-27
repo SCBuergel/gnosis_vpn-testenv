@@ -112,6 +112,9 @@ else:
             ts.note_recv(now)
         elif tag == b"DLND" and len(d) >= 20:
             psid, sent_total, send_end = struct.unpack("!IId", d[4:20])
+            if psid != sid:   # the end marker of a previous session on this port (the server sends eight over 2 s)
+                sent_total, send_end = None, None
+                continue
             break
     if sent_total is None:
         sent_total, send_end = maxseq + 1, start + a.duration + 1.0

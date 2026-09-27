@@ -141,6 +141,8 @@ def receiver():
             with loglock:
                 log.write("R,%d,%d,%.6f,%.6f\n" % (kind, seq, sent_at, now))
         elif tag == b"CALA":
+            if probelib.packet_sid(d) != a.sid:   # an ack for another session on this port must not start the sender
+                continue
             with ctl:
                 state["started"] = True
             ev("ACK")

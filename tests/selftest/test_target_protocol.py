@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -118,3 +119,51 @@ def test_probes_reject_sizes_and_rates_that_cannot_run(tmp_path):
             cmd += [f"--{k.replace('_', '-')}", str(v)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         assert r.returncode == 2 and "must be" in r.stderr, (name, args, r.returncode, r.stderr[-200:])
+
+
+def test_packet_sid_and_foreign_answers():
+    import struct
+    sys.path.insert(0, str(PROBES))
+    import probelib
+    assert probelib.packet_sid(b"CALA" + struct.pack("!I", 4242)) == 4242
+    assert probelib.packet_sid(b"CALA") is None and probelib.packet_sid(b"") is None
+    assert probelib.packet_sid(b"DLND" + struct.pack("!IId", 7, 3, 1.0)) == 7
+
+
+def test_stream_download_ignores_a_foreign_end_marker(tmp_path):
+    """A fake stream server answers the probe's CTLD with three DLDA for its sid, then a DLND for another session (the
+    burst a previous session leaves on a reused port), then two more DLDA and the real DLND. The probe must count all
+    five packets and take its totals from the real end marker, not stop at the foreign one."""
+    import socket
+    import struct
+    import threading
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.settimeout(10)
+
+    def serve():
+        d, addr = srv.recvfrom(65535)
+        assert d[:4] == b"CTLD"
+        sid = struct.unpack("!I", d[4:8])[0]
+        pad = b"x" * 100
+        for n in range(3):
+            srv.sendto(b"DLDA" + struct.pack("!IId", sid, n, time.time()) + pad, addr)
+        srv.sendto(b"DLND" + struct.pack("!IId", sid ^ 0xFFFFFFFF, 99, time.time()), addr)   # foreign session's end
+        time.sleep(0.3)
+        for n in range(3, 5):
+            srv.sendto(b"DLDA" + struct.pack("!IId", sid, n, time.time()) + pad, addr)
+        srv.sendto(b"DLND" + struct.pack("!IId", sid, 5, time.time()), addr)
+        # swallow the re-asks and keep-alives until the probe is gone
+        srv.settimeout(0.5)
+        while True:
+            try:
+                srv.recvfrom(65535)
+            except (TimeoutError, OSError):
+                break
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    j = _probe("streamprobe", tmp_path / "dl.json", mode="dl", host="127.0.0.1", port=port, rate_mbit=1.0, duration=1, size=600, iface="")
+    t.join(15)
+    assert j["recv"] == 5 and j.get("end_marker") != "lost" and j["sent"] == 5, j

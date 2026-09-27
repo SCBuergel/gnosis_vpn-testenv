@@ -11,6 +11,7 @@ us does not change. An empty iface means an unbound socket (loopback self-tests)
 The 8 MB socket buffers are the same choice as on the target side, for the reason given in docker/target/udpserver.py."""
 import math
 import socket
+import struct
 import threading
 import time
 
@@ -133,6 +134,13 @@ class TunnelSocket:
 
     def summary(self):
         return {"rebinds": self.rebinds, "outages": self.outages, "outage_total_s": self.outage_total_s(), "events": self.events}
+
+
+def packet_sid(d):
+    """The session id every target answer carries at bytes 4..8 (CALA, CALD, DLDA, DLND, UPRP...), or None when the
+    datagram is too short. A probe must compare it with its own sid before acting on any answer: the target
+    answers a reused port for a previous session too (CALA after a re-CALS, a burst of eight DLND over two seconds)."""
+    return struct.unpack("!I", d[4:8])[0] if len(d) >= 8 else None
 
 
 def pct_ms(values, p):
