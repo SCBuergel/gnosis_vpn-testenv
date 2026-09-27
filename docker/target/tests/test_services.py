@@ -181,3 +181,23 @@ def test_callsrv_answers_cale_from_a_cache_and_reaps_the_session(tmp_path):
     time.sleep(0.2)
     assert sid in state["sessions"] and state["sessions"][sid]["log"] is not handle and not state["sessions"][sid]["log"].closed
     s.close()
+
+
+def test_callsrv_reaps_a_session_whose_probe_died_before_cale(tmp_path):
+    """A session with upstream packets and no CALE (the probe died) is reaped once it has been silent stale_after."""
+    state = {}
+    port = _udp_service(callsrv.serve, logdir=str(tmp_path), reap_after=30, stale_after=0.4, state=state)
+    srv = ("127.0.0.1", port)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sid = 4343
+    for seq in range(3):
+        s.sendto(b"CALU" + callsrv.HDR.pack(sid, seq, 0, time.time()) + b"x" * 40, srv)
+    deadline = time.time() + 2
+    while sid not in state.get("sessions", {}) and time.time() < deadline:
+        time.sleep(0.05)
+    handle = state["sessions"][sid]["log"]
+    deadline = time.time() + 3
+    while sid in state["sessions"] and time.time() < deadline:
+        time.sleep(0.1)
+    assert sid not in state["sessions"] and handle.closed
+    s.close()
