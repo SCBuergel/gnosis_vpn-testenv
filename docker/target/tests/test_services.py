@@ -141,3 +141,35 @@ def test_pct_ms_nearest_rank():
     # the same nearest-rank line as tests/probes/probelib.py and tests/suitelib/stats.py: n=4 at p=0.5 is the 2nd smallest
     assert pct_ms([0.1, 0.2, 0.3, 0.4], 0.5) == 200.0 and pct_ms([0.1, 0.2, 0.3, 0.4, 0.5], 0.5) == 300.0
     assert pct_ms([0.1, 0.2, 0.3, 0.4], 0.95) == 400.0 and pct_ms([0.4, 0.1], 1.0) == 400.0 and pct_ms([], 0.5) is None
+
+
+def test_callsrv_answers_cale_from_a_cache_and_reaps_the_session(tmp_path):
+    """CALE twice gives the same report; once the downstream is done and the report is old enough the session is
+    forgotten and its log closed; a CALU for that sid afterwards opens a fresh session with a new handle."""
+    state = {}
+    port = _udp_service(callsrv.serve, logdir=str(tmp_path), reap_after=0.4, stale_after=0.4, state=state)
+    srv = ("127.0.0.1", port)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(3)
+    sid = 4242
+    s.sendto(b"CALS" + callsrv.CALS.pack(sid, 0.3, 20.0, 60, 20.0, 40, ) + b"\x00", srv)   # 0.3 s downstream
+    assert s.recv(65535)[:4] == b"CALA"
+    for seq in range(5):
+        s.sendto(b"CALU" + callsrv.HDR.pack(sid, seq, 0, time.time()) + b"x" * 40, srv)
+    time.sleep(0.6)                                                   # the downstream is over
+    handle = state["sessions"][sid]["log"]
+    reps = []
+    for _ in range(2):
+        s.sendto(b"CALE" + struct.pack("!I", sid), srv)
+        d = s.recv(65535)
+        assert d[:4] == b"CALR"
+        reps.append(json.loads(d[4:]))
+    assert reps[0] == reps[1] and reps[0]["recv_video"] == 5 and reps[0]["sent_video"] > 0
+    deadline = time.time() + 3
+    while sid in state["sessions"] and time.time() < deadline:
+        time.sleep(0.1)
+    assert sid not in state["sessions"] and handle.closed
+    s.sendto(b"CALU" + callsrv.HDR.pack(sid, 99, 1, time.time()) + b"y" * 20, srv)   # a late packet: a fresh session
+    time.sleep(0.2)
+    assert sid in state["sessions"] and state["sessions"][sid]["log"] is not handle and not state["sessions"][sid]["log"].closed
+    s.close()

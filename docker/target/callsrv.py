@@ -26,12 +26,18 @@ HDR = struct.Struct("!IIBd")            # sid, seq, kind, ts
 CALS = struct.Struct("!IffIfI")         # sid, dur, vpps, vsize, apps, asize
 
 
-def serve(port, logdir="/root/callsrv", sock=None):
+def serve(port, logdir="/root/callsrv", sock=None, reap_after=60.0, stale_after=600.0, state=None):
+    """reap_after: seconds after a session's CALE before it is forgotten and its log closed (the probe re-sends CALE up
+    to three times over a few seconds, so the report is answered from a cache until then); stale_after: seconds of
+    silence after which a session that never sent CALE (a probe that died) is reaped. state, for tests: a dict that
+    receives the live sessions table."""
     s = sock or bind_udp(port)
     os.makedirs(logdir, exist_ok=True)
     print("callsrv udp 0.0.0.0:%d" % port, flush=True)
     lock = threading.Lock()
-    sessions = {}   # sid -> dict(addr, log, recv[kind], sent[kind], started, last_up)
+    sessions = {}   # sid -> dict(addr, log, recv[kind], sent[kind], started, last_up, dl_done, ended, report)
+    if state is not None:
+        state["sessions"] = sessions
 
     def session(sid, addr):
         st = sessions.get(sid)
@@ -85,14 +91,33 @@ def serve(port, logdir="/root/callsrv", sock=None):
             with lock:
                 st["sent"][kind] += 1
                 log.write("D,%d,%d,%.6f\n" % (kind, seq, ts))
+        with lock:
+            st["dl_done"] = True        # no more writes to the log from this thread: the reaper may close it
         print("DL done sid=%d video=%d audio=%d" % (sid, nv, na), flush=True)
 
     def flusher():
+        # flush every open log each second, then reap: a session is forgotten and its log closed once its CALE is
+        # reap_after old (or, without a CALE, its last upstream packet stale_after old) and its downstream thread is
+        # done or was never started. The target container outlives every suite run; without this the sessions and
+        # their file handles accumulated for as long as it lived. The CSV files stay on disk.
         while True:
-            time.sleep(1.0)
+            time.sleep(min(1.0, reap_after / 2))
+            now = time.time()
             with lock:
-                for st in sessions.values():
+                for sid, st in list(sessions.items()):
                     st["log"].flush()
+                    quiet = st.get("dl_done") or not st["started"]
+                    if not quiet:
+                        continue
+                    if st.get("ended") is not None and now - st["ended"] >= reap_after:
+                        why = "ended %.0fs ago" % (now - st["ended"])
+                    elif st.get("ended") is None and now - st["last_up"] >= stale_after:
+                        why = "no CALE, silent %.0fs" % (now - st["last_up"])
+                    else:
+                        continue
+                    st["log"].close()
+                    del sessions[sid]
+                    print("reaped sid=%d (%s)" % (sid, why), flush=True)
 
     threading.Thread(target=flusher, daemon=True).start()
     while True:
@@ -129,9 +154,14 @@ def serve(port, logdir="/root/callsrv", sock=None):
             sid = struct.unpack("!I", d[4:8])[0]
             with lock:
                 st = sessions.get(sid)
-                rep = {"sid": sid, "recv_video": st["recv"][0], "recv_audio": st["recv"][1],
-                       "sent_video": st["sent"][0], "sent_audio": st["sent"][1]} if st else {"sid": sid, "error": "unknown"}
-                if st:
+                if st is None:
+                    rep = {"sid": sid, "error": "unknown"}
+                elif st.get("report") is not None:
+                    rep = st["report"]          # the probe re-sends CALE until a CALR arrives: same answer each time
+                else:
+                    rep = {"sid": sid, "recv_video": st["recv"][0], "recv_audio": st["recv"][1],
+                           "sent_video": st["sent"][0], "sent_audio": st["sent"][1]}
+                    st["report"], st["ended"] = rep, now
                     st["log"].flush()
             try:
                 s.sendto(b"CALR" + json.dumps(rep).encode(), a)
