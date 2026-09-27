@@ -7,7 +7,14 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--pids", default="")
 ap.add_argument("--urls", default="")
 ap.add_argument("--containers", default="")
-ap.add_argument("--interval", type=float, default=1.0)
+def _positive_seconds(v):
+    v = float(v)
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"--interval must be positive, got {v}")
+    return v
+
+
+ap.add_argument("--interval", type=_positive_seconds, default=1.0)
 ap.add_argument("--out", required=True)
 a = ap.parse_args()
 # pids and urls are positional, one slot per cluster node: an empty slot (a node without a pid or api url) is kept
@@ -61,20 +68,22 @@ def scrape(url):
     except Exception:
         pass
     return out
-prev_t = {p: pid_ticks(p) for p in pids}; prev_c = {c: cgroup_usage(c) for c in containers}; prev_time = time.time()
+prev_t = {p: pid_ticks(p) for p in pids}; prev_c = {c: cgroup_usage(c) for c in containers}; prev_mono = time.monotonic()
 with open(a.out, "a") as f:
     while True:
         time.sleep(a.interval)
-        now = time.time(); dt = now - prev_time; prev_time = now
+        # the row keeps the wall clock for its timestamp; the CPU percentages divide by a monotonic interval, so an NTP
+        # step cannot make dt zero or negative (a ZeroDivisionError would have killed the detached sampler)
+        now = time.time(); mono = time.monotonic(); dt = mono - prev_mono; prev_mono = mono
         row = {"t": round(now, 3), "nodes": [], "cpu_pct": {}, "container_cpu_pct": {}}
         for i, p in enumerate(pids):
             cur = pid_ticks(p)
-            if cur is not None and prev_t.get(p) is not None:
+            if dt > 0 and cur is not None and prev_t.get(p) is not None:
                 row["cpu_pct"][f"node{i}"] = round(100.0 * (cur - prev_t[p]) / CLK / dt, 1)
             prev_t[p] = cur
         for c in containers:
             cur = cgroup_usage(c)
-            if cur is not None and prev_c.get(c) is not None:
+            if dt > 0 and cur is not None and prev_c.get(c) is not None:
                 row["container_cpu_pct"][c] = round(100.0 * (cur - prev_c[c]) / 1e6 / dt, 1)
             prev_c[c] = cur
         for i, u in enumerate(urls):

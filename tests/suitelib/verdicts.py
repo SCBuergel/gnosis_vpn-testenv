@@ -190,11 +190,13 @@ def write_summary(run):
     with open(run / "summary.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["cell", "kind", "test", "status", "msg"])
+        # every row read_jsonl() yields was written whole by verdict() with all five keys (a cut line never parses),
+        # so the .get() defaults are uniformity with the cell/kind reads, not a recovery path
         for x in v:
-            w.writerow([x.get("cell", ""), x.get("kind", ""), x["test"], x["status"], x["msg"]])
+            w.writerow([x.get("cell", ""), x.get("kind", ""), x.get("test", ""), x.get("status", ""), x.get("msg", "")])
     by = collections.defaultdict(collections.Counter)
     for x in v:
-        by[x.get("kind", "gate")][x["status"]] += 1
+        by[x.get("kind", "gate")][x.get("status", "")] += 1
     for kind in KINDS:
         if by.get(kind):
             print(f"{kind:11s}", dict(by[kind]))
