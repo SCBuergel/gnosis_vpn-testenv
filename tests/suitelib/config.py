@@ -70,23 +70,23 @@ class Config:
         self.testenv_dir = Path(e.get("TESTENV_DIR") or here.parent)
         self.client = e.get("CLIENT") or "gnosis_vpn-client"
         self.client2 = e.get("CLIENT2") or "gnosis_vpn-client-2"
-        self.client_count = int(e.get("CLIENT_COUNT", "1"))
+        self.client_count = int(e.get("CLIENT_COUNT") or "1")
         # seconds after connect before measuring; see Client.connect for why this must not be raised
-        self.surb_ramp_wait = int(e.get("SURB_RAMP_WAIT", "25"))
+        self.surb_ramp_wait = int(e.get("SURB_RAMP_WAIT") or "25")
         self.dest = e.get("DEST") or "node-0"
         self.target_name = e.get("TARGET_NAME") or "gnosis_vpn-target"
         self.target_network = e.get("TARGET_NETWORK") or "gnosis-vpn-target"
         self.docker_network = e.get("DOCKER_NETWORK") or "gnosis-vpn-testenv"
         self.data_dir = Path(e.get("DATA_DIR") or "/tmp/hopr-nodes")
         self.config_dir = Path(e.get("CONFIG_DIR") or "/tmp/gnosis_vpn-testenv")
-        self.cluster_size = int(e.get("CLUSTER_SIZE", "3"))
+        self.cluster_size = int(e.get("CLUSTER_SIZE") or "3")
         hoprd_dir = e.get("HOPRD_DIR") or str(self.testenv_dir.parent / "hoprd")
         self.localcluster_bin = e.get("LOCALCLUSTER_BIN") or f"{hoprd_dir}/result-localcluster/bin/hoprd-localcluster"
         self.hoprd_bin = e.get("HOPRD_BIN") or f"{hoprd_dir}/result-hoprd/bin/hoprd"
         self.out_dir = Path(e.get("SUITE_OUT_DIR") or "/tmp/gnosis_vpn-testenv-suite")
         self.cell = e.get("SUITE_CELL", "")
-        self.deadman = int(e.get("DEADMAN", "900"))
-        self.connect_timeout = int(e.get("CONNECT_TIMEOUT", "240"))
+        self.deadman = int(e.get("DEADMAN") or "900")
+        self.connect_timeout = int(e.get("CONNECT_TIMEOUT") or "240")
         self.server = e.get("SERVER") or "gnosis_vpn-server-0"
         self.netem_iface = e.get("NETEM_IFACE") or "lo"
         self.save_log_raw = e.get("SAVE_LOG_RAW", "0") == "1"
@@ -95,7 +95,7 @@ class Config:
         self.target_host = e.get("TARGET_HOST", "")
         self.no_cluster = e.get("NO_CLUSTER", "0") == "1"
         # every test is killed after this many seconds unless its module computes its own TIMEOUT(knobs)
-        self.test_timeout = int(e.get("TEST_TIMEOUT", "7200"))
+        self.test_timeout = int(e.get("TEST_TIMEOUT") or "7200")
         self.client_image = e.get("CLIENT_IMAGE", "")
         self.cluster_env = e.get("CLUSTER_ENV", "")
         self.cluster_latency = e.get("CLUSTER_LATENCY", "")

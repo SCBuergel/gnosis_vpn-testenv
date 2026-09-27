@@ -193,7 +193,7 @@ class NodeSampler:
 
     def start(self):
         c = self.cluster
-        pids = ",".join(str(c.pid(i)) for i in range(c.size))
+        pids = ",".join(str(c.pid(i) or "") for i in range(c.size))   # the sampler's sentinel for "no pid" is the empty slot, not 0
         urls = ",".join(c.api_url(i) for i in range(c.size))
         script = Path(__file__).resolve().parent.parent / "node-sampler.py"
         self.proc = subprocess.Popen([sys.executable, str(script), "--pids", pids, "--urls", urls, "--interval",
