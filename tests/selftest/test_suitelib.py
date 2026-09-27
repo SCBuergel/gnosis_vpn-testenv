@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from suitelib import tomlcfg  # noqa: E402
 from suitelib.client import count_log_errors, sidecar_mount_issues, telemetry_sum  # noqa: E402
 from suitelib.config import Config, q  # noqa: E402
-from suitelib.verdicts import Checks, RunDir  # noqa: E402
+from suitelib.verdicts import Checks, RunDir, read_jsonl  # noqa: E402
 from suitelib.stats import p95, pct, stats  # noqa: E402
 from suitelib.target import _curl_result  # noqa: E402
 
@@ -240,3 +240,19 @@ def test_sidecar_mount_issues(tmp_path):
     assert len(wrong) == 1 and wrong[0].startswith("/suite-out is ") and str(out) in wrong[0]
     assert sidecar_mount_issues({}, tests, out) == ["/suite is not mounted", "/suite-out is not mounted"]
     assert sidecar_mount_issues(None, tests, out) == ["/suite is not mounted", "/suite-out is not mounted"]
+
+
+def test_read_jsonl_skips_a_cut_line(tmp_path):
+    p = tmp_path / "x.jsonl"
+    p.write_text('{"a": 1}\n{"a": 2, "msg": "cut sho\n\n{"a": 3}\n')
+    assert [r["a"] for r in read_jsonl(p, "test")] == [1, 3]
+    assert read_jsonl(tmp_path / "missing.jsonl", "test", missing_ok=True) == []
+    with pytest.raises(FileNotFoundError):
+        read_jsonl(tmp_path / "missing.jsonl", "test")
+
+
+def test_rundir_survives_a_cut_verdict_line(rundir):
+    rundir.verdict("T00-x", "PASS", "gate", "one")
+    with open(rundir.verdicts_file, "a") as fh:
+        fh.write('{"t": 1, "cell": "c", "test": "T00-x", "status": "FA')
+    assert [v["status"] for v in rundir.verdicts()] == ["PASS"]

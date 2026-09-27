@@ -10,13 +10,15 @@ fields allowed, '#' comments). For every cell: just down, bring the stack up wit
 SUITE_OUT_DIR/matrix-<stamp>.csv across cells."""
 import csv
 import glob
-import json
 import os
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from suitelib.verdicts import read_jsonl  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TESTENV = HERE.parent
@@ -93,14 +95,9 @@ def main(argv):
         _run("just down", cwd=TESTENV, env=env, capture_output=True, timeout=900)
     rows = []
     for d in sorted(glob.glob(f"{out}/{stamp}-*")):
-        try:
-            with open(f"{d}/verdicts.jsonl") as fh:
-                for l in fh:
-                    if l.strip():
-                        v = json.loads(l)
-                        rows.append([v.get("cell"), v["test"], v["status"], v["msg"]])
-        except FileNotFoundError:
-            pass
+        # a cell killed mid-write leaves a cut line; the CSV is built from every whole one (read_jsonl skips the rest)
+        for v in read_jsonl(f"{d}/verdicts.jsonl", f"{d} verdicts", missing_ok=True):
+            rows.append([v.get("cell"), v.get("test"), v.get("status"), v.get("msg")])
     with open(out / f"matrix-{stamp}.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["cell", "test", "status", "msg"])

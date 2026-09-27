@@ -4,6 +4,8 @@ import json
 import subprocess
 import sys
 import urllib.request
+
+from suitelib.verdicts import read_jsonl
 from pathlib import Path
 
 from . import shell
@@ -201,11 +203,8 @@ class NodeSampler:
             self.proc = None
 
     def rows(self):
-        try:
-            with open(self.path) as fh:
-                return [json.loads(l) for l in fh if l.strip()]
-        except FileNotFoundError:
-            return []
+        # the sampler is killed at the end of the measurement; its last line may be cut short
+        return read_jsonl(self.path, "sampler rows", missing_ok=True)
 
     def __enter__(self):
         return self.start()

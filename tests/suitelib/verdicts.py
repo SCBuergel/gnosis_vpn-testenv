@@ -25,6 +25,29 @@ def log(*parts):
     print(time.strftime("%H:%M:%S", time.gmtime()), *parts, file=sys.stderr, flush=True)
 
 
+def read_jsonl(path, what="jsonl", missing_ok=False):
+    """Every parseable line of a .jsonl file as a list of objects. A malformed line (a write cut short by a kill or
+    the OOM killer, the way a run ends when the host is lost) is skipped and counted, never raised, so the run's
+    summary, the matrix CSV and the sampler rows still come out of what was written. A missing file raises unless
+    missing_ok, in which case it reads as empty."""
+    out, bad = [], 0
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    bad += 1
+    except FileNotFoundError:
+        if not missing_ok:
+            raise
+    if bad:
+        log(f"{path}: {bad} malformed line(s) skipped while reading {what}")
+    return out
+
+
 class RunDir:
     def __init__(self, path, cell=""):
         self.path = Path(path).resolve()   # resolve the 'latest' symlink: the container sees the real dir
@@ -60,19 +83,10 @@ class RunDir:
                                 "status": status, "kind": kind, "msg": msg}) + "\n")
 
     def verdicts(self):
-        with open(self.verdicts_file) as fh:
-            return [json.loads(l) for l in fh if l.strip()]
+        return read_jsonl(self.verdicts_file, "verdicts")
 
     def rows(self, test=None):
-        out = []
-        with open(self.rows_file) as fh:
-            for l in fh:
-                if not l.strip():
-                    continue
-                r = json.loads(l)
-                if test is None or r.get("test") == test:
-                    out.append(r)
-        return out
+        return [r for r in read_jsonl(self.rows_file, "rows") if test is None or r.get("test") == test]
 
     def read_json(self, name, default=None):
         try:
