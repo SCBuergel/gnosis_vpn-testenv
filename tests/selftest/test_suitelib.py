@@ -256,3 +256,18 @@ def test_rundir_survives_a_cut_verdict_line(rundir):
     with open(rundir.verdicts_file, "a") as fh:
         fh.write('{"t": 1, "cell": "c", "test": "T00-x", "status": "FA')
     assert [v["status"] for v in rundir.verdicts()] == ["PASS"]
+
+
+def test_knob_lists_are_validated():
+    cfg = Config({}, {})
+    k = cfg.knobs("T05", dict(PARALLEL="1 3 6", RUNGS="0 25 50", MTUS="default 940", EMPTY=""))
+    assert k.numbers("PARALLEL", lo=1, ints=True) == [1, 3, 6] and k.numbers("RUNGS", lo=0) == [0, 25, 50]
+    assert k.words("MTUS", required=True) == ["default", "940"]
+    for name, kw in (("EMPTY", {}), ("RUNGS", dict(lo=1)), ("MTUS", {})):
+        with pytest.raises(ValueError, match=name):
+            k.numbers(name, **kw)
+    with pytest.raises(ValueError, match="EMPTY"):
+        k.words("EMPTY", required=True)
+    assert k.words("EMPTY") == [] and k.numbers("EMPTY", required=False) == []
+    with pytest.raises(ValueError, match="-1"):
+        cfg.knobs("T15", dict(DELAYS="0 -1")).numbers("DELAYS", lo=0, ints=True)

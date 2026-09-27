@@ -62,30 +62,33 @@ class Config:
         self.cli_knobs = dict(knobs or {})
         self.consumed = set()
         e = self.env
+        # `e.get(X) or default` for every name and path where an empty value is never a value (a justfile that exports
+        # an unset variable passes ""; Path("") is the current directory); the plain get() stays where "" means something
+        # (TARGET_HOST, SUITE_CELL, CLIENT_IMAGE, CLUSTER_ENV, CLUSTER_LATENCY, CLIENT_EXTRA_ENV)
         here = Path(__file__).resolve().parent.parent          # tests/
         self.suite_dir = here
         self.testenv_dir = Path(e.get("TESTENV_DIR") or here.parent)
-        self.client = e.get("CLIENT", "gnosis_vpn-client")
-        self.client2 = e.get("CLIENT2", "gnosis_vpn-client-2")
+        self.client = e.get("CLIENT") or "gnosis_vpn-client"
+        self.client2 = e.get("CLIENT2") or "gnosis_vpn-client-2"
         self.client_count = int(e.get("CLIENT_COUNT", "1"))
         # seconds after connect before measuring; see Client.connect for why this must not be raised
         self.surb_ramp_wait = int(e.get("SURB_RAMP_WAIT", "25"))
-        self.dest = e.get("DEST", "node-0")
-        self.target_name = e.get("TARGET_NAME", "gnosis_vpn-target")
-        self.target_network = e.get("TARGET_NETWORK", "gnosis-vpn-target")
-        self.docker_network = e.get("DOCKER_NETWORK", "gnosis-vpn-testenv")
-        self.data_dir = Path(e.get("DATA_DIR", "/tmp/hopr-nodes"))
-        self.config_dir = Path(e.get("CONFIG_DIR", "/tmp/gnosis_vpn-testenv"))
+        self.dest = e.get("DEST") or "node-0"
+        self.target_name = e.get("TARGET_NAME") or "gnosis_vpn-target"
+        self.target_network = e.get("TARGET_NETWORK") or "gnosis-vpn-target"
+        self.docker_network = e.get("DOCKER_NETWORK") or "gnosis-vpn-testenv"
+        self.data_dir = Path(e.get("DATA_DIR") or "/tmp/hopr-nodes")
+        self.config_dir = Path(e.get("CONFIG_DIR") or "/tmp/gnosis_vpn-testenv")
         self.cluster_size = int(e.get("CLUSTER_SIZE", "3"))
         hoprd_dir = e.get("HOPRD_DIR") or str(self.testenv_dir.parent / "hoprd")
         self.localcluster_bin = e.get("LOCALCLUSTER_BIN") or f"{hoprd_dir}/result-localcluster/bin/hoprd-localcluster"
         self.hoprd_bin = e.get("HOPRD_BIN") or f"{hoprd_dir}/result-hoprd/bin/hoprd"
-        self.out_dir = Path(e.get("SUITE_OUT_DIR", "/tmp/gnosis_vpn-testenv-suite"))
+        self.out_dir = Path(e.get("SUITE_OUT_DIR") or "/tmp/gnosis_vpn-testenv-suite")
         self.cell = e.get("SUITE_CELL", "")
         self.deadman = int(e.get("DEADMAN", "900"))
         self.connect_timeout = int(e.get("CONNECT_TIMEOUT", "240"))
-        self.server = e.get("SERVER", "gnosis_vpn-server-0")
-        self.netem_iface = e.get("NETEM_IFACE", "lo")
+        self.server = e.get("SERVER") or "gnosis_vpn-server-0"
+        self.netem_iface = e.get("NETEM_IFACE") or "lo"
         self.save_log_raw = e.get("SAVE_LOG_RAW", "0") == "1"
         # production-network mode: an external target (TARGET_HOST, --target) replaces the in-cluster container and
         # NO_CLUSTER=1 (--no-cluster) tells the cluster-dependent checks there is no localcluster to ask
@@ -139,12 +142,28 @@ class Knobs(dict):
         except KeyError:
             raise AttributeError(k)
 
-    def words(self, k):
-        """A space-separated knob ('0 25 50') as a list of strings."""
-        return str(self[k]).split()
+    def words(self, k, required=False):
+        """A space-separated knob ('0 25 50') as a list of strings; with required, an empty knob is an error naming it
+        (a ladder with no rungs would otherwise run nothing and pass, T05 PARALLEL="")."""
+        out = str(self[k]).split()
+        if required and not out:
+            raise ValueError(f"knob {k} is empty; it needs at least one value")
+        return out
 
-    def numbers(self, k):
-        return [float(x) for x in self.words(k)]
+    def numbers(self, k, lo=None, ints=False, required=True):
+        """The knob's words as numbers, validated: an empty knob (when required), a word that is not a number, or a
+        value below lo is an error naming the knob and the value. lo is per site: rungs, delays and losses hold 0
+        legitimately, sizes, parallel counts, ladders and MTUs need at least 1."""
+        out = []
+        for w in self.words(k, required=required):
+            try:
+                v = int(w) if ints else float(w)
+            except ValueError:
+                raise ValueError(f"knob {k}: {w!r} is not a{'n integer' if ints else ' number'}") from None
+            if lo is not None and v < lo:
+                raise ValueError(f"knob {k}: {w} is below the minimum {lo}")
+            out.append(v)
+        return out
 
     def describe(self):
         return " ".join(f"{k}={v}" for k, v in self.items())

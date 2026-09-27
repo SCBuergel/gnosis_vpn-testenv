@@ -35,7 +35,7 @@ def test_balancer_sweep(cfg, run, client, cluster, target, checks, knobs):
     cfg_file = cfg.config_dir / "client.toml"
     orig = run / "client.toml.t12.orig"
     shutil.copy(cfg_file, orig)
-    cells = [f"main:{u}" for u in k.words("UPSTREAMS")] + ["ping:10MB"]
+    cells = [f"main:{u}" for u in k.numbers("UPSTREAMS", lo=1, ints=True)] + ["ping:10MB"]
     best, worst = 0.0, 999999.0
 
     def exit_target():

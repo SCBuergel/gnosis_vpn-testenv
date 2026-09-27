@@ -53,7 +53,7 @@ def test_fixed_throughput(cfg, client, cluster, target, checks, knobs):
         return
     with s:
         with cluster.sampler(checks.run, k.LABEL, 1, [client.name, cfg.server]):
-            sizes = [int(float(m) * MIB) for m in k.words("SIZES_MIB")]
+            sizes = [int(m * MIB) for m in k.numbers("SIZES_MIB", lo=0.001)]
             summary = transfer_series(checks, client, k.LABEL, target.ip, cfg.reps, cfg.bytes, cfg.cap, sizes=sizes)
         errs = s.errors()
         s.save_log(k.LABEL)

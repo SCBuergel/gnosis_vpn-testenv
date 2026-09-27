@@ -27,7 +27,7 @@ def test_capacity_ceiling(cfg, run, client, cluster, target, checks, knobs):
         return
     knee, wd_above = 0, 0
     with s:
-        for r in k.words("LADDER"):
+        for r in [str(x) for x in k.numbers("LADDER", lo=1, ints=True)]:
             with cluster.sampler(run, f"t18-{r}", 1, [client.name, cfg.server]) as sampler:
                 client.probe("streamprobe", f"t18-{r}.json", timeout=k.STEP_S + 90, mode="dl", host=target.ip, port=target.stream_port,
                              rate_mbit=r, duration=k.STEP_S, size=1200, iface=s.iface)

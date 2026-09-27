@@ -20,7 +20,7 @@ KNOBS = dict(DELAYS=q("0 5 15 30 60", "0 5 20"), KNEE_FRAC=0.8, KNEE_MAX_S=30)
 
 def test_warmup_knee(cfg, client, target, checks, knobs):
     k = knobs
-    delays, vals = k.words("DELAYS"), []
+    delays, vals = [str(d) for d in k.numbers("DELAYS", lo=0, ints=True)], []
     for d in delays:
         s = connect_or_fail(checks, client, cfg.dest, int(d), label=f"delay {d}", ramp_wait_opt_out=True)
         if not s:

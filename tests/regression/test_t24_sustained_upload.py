@@ -29,7 +29,7 @@ UNDECODABLE = 'hopr_packet_rejected_count{reason="undecodable"}'
 def test_sustained_upload(cfg, run, client, target, checks, knobs):
     k = knobs
     client.deadman_cover(k.DUR)
-    for mtu in k.words("MTUS"):
+    for mtu in k.words("MTUS", required=True):
         s = connect_or_fail(checks, client, cfg.dest, 15, label=f"mtu {mtu}")
         if not s:
             return

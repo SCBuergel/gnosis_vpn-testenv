@@ -27,7 +27,7 @@ TIMEOUT = lambda k: len(k.words("MTUS")) * (k.STREAM_S + 1200)   # seconds; the 
 def test_mtu_sweep(cfg, run, client, target, checks, knobs):
     k = knobs
     rec, m940 = {}, 0
-    for mtu in k.words("MTUS"):
+    for mtu in k.words("MTUS", required=True):
         s = connect_or_fail(checks, client, cfg.dest, 15, label=f"mtu {mtu}")
         if not s:
             return

@@ -63,7 +63,7 @@ def test_fault_injection(cfg, run, client, live_cluster, target, checks, knobs):
         s = connect_or_fail(checks, client, cfg.dest, 15)
         if not s:
             return
-        losses = k.words("LOSSES")
+        losses = [str(x) for x in k.numbers("LOSSES", lo=0, ints=True)]
         # the call must cover the whole ladder: (1 settle + one step per loss value + 1 pause + 2 restore) x STEP_S
         total = (len(losses) + 1) * k.STEP_S + 3 * k.STEP_S
         with s:

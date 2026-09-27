@@ -37,7 +37,7 @@ def test_background_load(cfg, client, client2, target, checks, knobs):
             ctrl = curl_down(client, target.ip, cfg.bytes, cfg.cap)
             checks.row(arm="idle-neighbour", download=ctrl)
             res, steps = [f"idle {ctrl['mbit']}"], []
-            for kb in k.words("TRICKLES"):
+            for kb in k.numbers("TRICKLES", lo=1, ints=True):
                 client2.exec_bg(f"echo $$ > /tmp/t19-trickle.pid; for i in $(seq 1 120); do curl -s -o /dev/null -m 10 "
                                 f"{target.down_url(int(kb) * 1000)}; sleep 2; done")
                 time.sleep(4)

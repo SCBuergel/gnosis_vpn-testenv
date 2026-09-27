@@ -73,7 +73,7 @@ def test_impairment_ladder(cfg, run, client, live_cluster, target, checks, knobs
         return False
 
     try:
-        for ms in k.numbers("RUNGS"):
+        for ms in k.numbers("RUNGS", lo=0):
             ms = int(ms) if ms == int(ms) else ms
             if impaired({r: ms for r in relays} if ms else {}, f"equal-{ms}ms", True):
                 cell(f"equal-{ms}ms", True)

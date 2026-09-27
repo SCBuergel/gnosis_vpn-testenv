@@ -52,7 +52,7 @@ def test_loaded_latency(cfg, client, target, checks, knobs):
         checks.row(phase="download", rtt=d_s, p95=p95(dl))
         checks.row(phase="upload", rtt=u_s, p95=p95(ul))
         agg_ok, prev, incomplete = True, 0.0, []
-        for n in [int(x) for x in k.words("PARALLEL")]:
+        for n in k.numbers("PARALLEL", lo=1, ints=True):
             t0 = time.time()
             w = client.out(f"for i in $(seq 1 {n}); do curl -s -o /dev/null -m {cfg.cap} -w '%{{size_download}} %{{time_total}}\\n' "
                            f"{target.down_url(cfg.bytes)} & done; wait", timeout=cfg.cap + 60)
