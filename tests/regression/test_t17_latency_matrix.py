@@ -45,7 +45,9 @@ def test_latency_matrix(cfg, live_cluster, checks, knobs):
     # gate: every configured delay must show up in the measured medians (traffic to that node, from node 0)
     checks.kind = "gate"
     bad = []
-    base = med.get((0, 1)) or 3
+    base = med.get((0, 1))
+    if base is None:          # missing, not a measured 0.0 ms (which `or` would have replaced by the fallback)
+        base = 3.0
     for kv in k.SUITE_LATENCY_MAP.split():
         idx, want = kv.split("=")
         got = med.get((0, int(idx)))
