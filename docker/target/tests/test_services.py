@@ -13,6 +13,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 import callecho
+import callsrv
 import main
 import speedtarget
 import streamsrv
@@ -147,23 +148,30 @@ def test_callsrv_answers_cale_from_a_cache_and_reaps_the_session(tmp_path):
     """CALE twice gives the same report; once the downstream is done and the report is old enough the session is
     forgotten and its log closed; a CALU for that sid afterwards opens a fresh session with a new handle."""
     state = {}
-    port = _udp_service(callsrv.serve, logdir=str(tmp_path), reap_after=0.4, stale_after=0.4, state=state)
+    # a short age after CALE, a long stale age: the test must not be reaped as "no CALE, silent" while it waits
+    port = _udp_service(callsrv.serve, logdir=str(tmp_path), reap_after=0.4, stale_after=30, state=state)
     srv = ("127.0.0.1", port)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(3)
     sid = 4242
-    s.sendto(b"CALS" + callsrv.CALS.pack(sid, 0.3, 20.0, 60, 20.0, 40, ) + b"\x00", srv)   # 0.3 s downstream
-    assert s.recv(65535)[:4] == b"CALA"
+    s.sendto(b"CALS" + callsrv.CALS.pack(sid, 0.3, 20.0, 60, 20.0, 40) + b"\x00", srv)   # 0.3 s downstream
+
+    def recv_tag(tag):
+        for _ in range(200):                                          # the downstream's CALD may arrive before the ack
+            d = s.recv(65535)
+            if d[:4] == tag:
+                return d
+        raise AssertionError("no %r within 200 datagrams" % tag)
+
+    recv_tag(b"CALA")
     for seq in range(5):
         s.sendto(b"CALU" + callsrv.HDR.pack(sid, seq, 0, time.time()) + b"x" * 40, srv)
-    time.sleep(0.6)                                                   # the downstream is over
     handle = state["sessions"][sid]["log"]
+    time.sleep(0.6)                                                   # the downstream is over
     reps = []
     for _ in range(2):
         s.sendto(b"CALE" + struct.pack("!I", sid), srv)
-        d = s.recv(65535)
-        assert d[:4] == b"CALR"
-        reps.append(json.loads(d[4:]))
+        reps.append(json.loads(recv_tag(b"CALR")[4:]))
     assert reps[0] == reps[1] and reps[0]["recv_video"] == 5 and reps[0]["sent_video"] > 0
     deadline = time.time() + 3
     while sid in state["sessions"] and time.time() < deadline:
