@@ -111,13 +111,21 @@ class Cluster:
     # -- inter-node latency, live, no cluster restart ---------------------------------------------------------
     # On the single-host localcluster every node's P2P address is the Docker gateway, which routes via lo, so
     # tc netem on lo with a per-destination-port filter shapes one relay's traffic live. Needs root.
+    NETEM_BANDS = 16          # the prio qdisc's bands; bands 1-2 carry the unimpaired traffic, 3.. one node each
+    NETEM_MAX_NODES = NETEM_BANDS - 2
+
     def netem_apply(self, delays):
-        """delays: {node_index: one_way_ms}; empty clears."""
+        """delays: {node_index: one_way_ms}; empty clears. At most NETEM_MAX_NODES (14) nodes can be impaired at once;
+        no run the suite makes gets near it (CLUSTER_SIZE defaults to 3 and T09-impairment-ladder impairs at most
+        two relays), so the guard is for a hand-built cluster, and it says so rather than reporting a tc return code."""
         iface = self.cfg.netem_iface
+        if len(delays) > self.NETEM_MAX_NODES:
+            log(f"netem: {len(delays)} nodes exceed the {self.NETEM_MAX_NODES} prio bands available; impairment NOT applied")
+            return False
         shell.run(["tc", "qdisc", "del", "dev", iface, "root"], timeout=30)
         if not delays:
             return True
-        if not shell.ok(["tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio", "bands", "16"], timeout=30):
+        if not shell.ok(["tc", "qdisc", "add", "dev", iface, "root", "handle", "1:", "prio", "bands", str(self.NETEM_BANDS)], timeout=30):
             return False
         band = 3
         for idx, ms in delays.items():

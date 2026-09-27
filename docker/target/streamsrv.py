@@ -18,8 +18,9 @@ from udpserver import bind_udp, quantiles_ms, stall_stats
 def serve(port, sock=None):
     s = sock or bind_udp(port)
     print(f"streamsrv udp 0.0.0.0:{port}", flush=True)
-    # every reader and writer of ul, dl_started and dl_addr holds `lock`: the receive loop's CTLD and KEEP handlers
-    # and each stream thread's cleanup (which takes it only at its end, so starting a stream under the lock cannot deadlock)
+    # every writer of ul, dl_started and dl_addr holds `lock`, and so do the receive loop's readers: the CTLD and KEEP
+    # handlers, UPLD/UPRQ, and each stream thread's cleanup (which takes it only at its end, so starting a stream under
+    # the lock cannot deadlock); dl_stream's own dl_addr.get() in its send loop is a single dict read and stays unlocked
     ul, dl_started, dl_addr, lock = {}, set(), {}, threading.Lock()
 
     def dl_stream(addr, sid, pps, size, dur):
