@@ -273,6 +273,26 @@ def pytest_pyfunc_call(pyfuncitem):
     return True
 
 
+def record_raise(run, name, kind, checks, longrepr):
+    """A test that raised instead of recording. A diagnostic or runbook item gets one WARN row. A gate that recorded
+    no FAIL of its own (a knob error, any exception before its first verdict) gets one FAIL row: its raise used to
+    reach only pytest, so run.txt said rc=1 and console.log held the traceback while verdicts.jsonl, summary.csv and
+    the gate count had nothing, and the summary could print "passed" under a failing exit code. A gate whose own
+    checks already hold a FAIL (a recorded failure, the timeout path) needs no second row. Returns the status written
+    or None; the traceback goes to the console, and so to console.log."""
+    full = str(longrepr).strip() if longrepr else "raised"
+    msg = full.splitlines()[-1][:300]
+    if kind != "gate":
+        status = "WARN"
+    elif not getattr(checks, "failures", None):
+        status = "FAIL"
+    else:
+        return None
+    run.verdict(name, status, kind, f"{kind} raised instead of recording: {msg}")
+    print(f"{status} {name}: {kind} raised instead of recording: {msg}\n{full}", flush=True)
+    return status
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -283,15 +303,13 @@ def pytest_runtest_makereport(item, call):
         return
     checks = getattr(item, "funcargs", {}).get("checks")
     kind = getattr(checks, "kind", None) or getattr(item.module, "KIND", "gate")   # a test may promote itself (T17 with a map)
-    if rep.failed and kind != "gate":
-        # only a gate may fail the run: a diagnostic or runbook item that raised (timeout, exception) is recorded as
-        # WARN and its pytest outcome rewritten, so the process exit code stays a gate-only signal
-        full = str(rep.longrepr).strip() if rep.longrepr else "raised"
-        msg = full.splitlines()[-1][:300]
-        state.run.verdict(getattr(item.module, "TEST", tid), "WARN", kind, f"{kind} raised instead of recording: {msg}")
-        print(f"WARN {getattr(item.module, 'TEST', tid)}: {kind} raised instead of recording: {msg}\n{full}", flush=True)   # the traceback stays in console.log
-        rep.outcome = "passed"
-        rep.longrepr = None
+    if rep.failed:
+        status = record_raise(state.run, getattr(item.module, "TEST", tid), kind, checks, rep.longrepr)
+        if status == "WARN":
+            # only a gate may fail the run: a diagnostic or runbook item that raised has its pytest outcome rewritten,
+            # so the process exit code stays a gate-only signal
+            rep.outcome = "passed"
+            rep.longrepr = None
     rc = 1 if rep.failed else 0
     with open(state.run / "run.txt", "a") as r:
         r.write(f"{time.strftime('%T', time.gmtime())} {tid} rc={rc} took={int(rep.duration)}s\n")

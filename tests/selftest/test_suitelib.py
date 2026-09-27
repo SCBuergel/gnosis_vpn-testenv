@@ -11,6 +11,7 @@ from suitelib import tomlcfg  # noqa: E402
 from suitelib.client import count_log_errors, sidecar_mount_issues, telemetry_sum  # noqa: E402
 from suitelib.config import Config, q  # noqa: E402
 from suitelib.verdicts import Checks, RunDir, read_jsonl  # noqa: E402
+from conftest import record_raise  # noqa: E402
 from suitelib.stats import p95, pct, stats  # noqa: E402
 from suitelib.target import _curl_result  # noqa: E402
 
@@ -271,3 +272,17 @@ def test_knob_lists_are_validated():
     assert k.words("EMPTY") == [] and k.numbers("EMPTY", required=False) == []
     with pytest.raises(ValueError, match="-1"):
         cfg.knobs("T15", dict(DELAYS="0 -1")).numbers("DELAYS", lo=0, ints=True)
+
+
+def test_a_gate_that_raises_leaves_one_fail_row(rundir):
+    class Fake:
+        kind = "gate"
+        failures = []
+    assert record_raise(rundir, "T00-x", "gate", Fake(), "Traceback...\nValueError: knob PARALLEL is empty") == "FAIL"
+    v = rundir.verdicts()
+    assert len(v) == 1 and v[0]["status"] == "FAIL" and v[0]["kind"] == "gate" and "knob PARALLEL is empty" in v[0]["msg"]
+    # a gate whose own checks already hold a FAIL (a recorded failure, the timeout path) gets no second row
+    Fake.failures = ["recorded already"]
+    assert record_raise(rundir, "T00-x", "gate", Fake(), "boom") is None and len(rundir.verdicts()) == 1
+    # a diagnostic that raises gets one WARN, as before
+    assert record_raise(rundir, "T00-d", "diagnostic", None, "boom") == "WARN" and rundir.verdicts()[-1]["status"] == "WARN"
