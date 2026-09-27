@@ -153,7 +153,12 @@ class Cluster:
 
     @staticmethod
     def netem_count():
-        return shell.out("tc qdisc show 2>/dev/null", timeout=30).count("netem")
+        """netem qdiscs on the host, or None when tc could not answer (missing, no permission): the caller must not
+        read a failed check as "none", which is what shell.out's "" on a non-zero exit used to give."""
+        r = shell.run("tc qdisc show", timeout=30)
+        if r.returncode != 0:
+            return None
+        return r.stdout.count("netem")
 
     # -- sampler ---------------------------------------------------------------------------------------------
     def sampler(self, run, name, interval=1, containers=()):

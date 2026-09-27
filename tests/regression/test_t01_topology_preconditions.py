@@ -155,12 +155,21 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
                           f"or fix the client's tunnel_ping_loop")
     checks.row(check="liveness_target", periodic=k.PERIODIC_PING_TARGET, configured=cfg_ping, server_wggvpn=" ".join(srv_addrs))
     # host hygiene
+    # a check that could not run must not read as clean: tc or systemctl failing is a WARN naming the reason, not a
+    # PASS (a missing tc on a host that never impairs is not a broken stack, so not a FAIL either)
     q = cluster.netem_count()
-    checks.verdict(q == 0, f"{q} netem qdisc(s) on host" if q else "no netem qdisc on host")
-    timers = shell.out("systemctl list-timers --all 2>/dev/null", timeout=30)
-    tm = sum(1 for l in timers.splitlines() if re.search(r"deadman|suite-", l, re.I))
-    if tm == 0:
-        checks.passed("no armed suite timers")
+    if q is None:
+        r = shell.run("tc qdisc show", timeout=30)
+        checks.warn(f"netem check unavailable: {(r.stderr or r.stdout).strip().splitlines()[0][:120] if (r.stderr or r.stdout).strip() else 'tc exited ' + str(r.returncode)}")
     else:
-        checks.warn(f"{tm} suite/deadman timers armed")
+        checks.verdict(q == 0, f"{q} netem qdisc(s) on host" if q else "no netem qdisc on host")
+    r = shell.run("systemctl list-timers --all", timeout=30)
+    if r.returncode != 0:
+        checks.warn(f"timer check unavailable: {(r.stderr or r.stdout).strip().splitlines()[0][:120] if (r.stderr or r.stdout).strip() else 'systemctl exited ' + str(r.returncode)}")
+    else:
+        tm = sum(1 for l in r.stdout.splitlines() if re.search(r"deadman|suite-", l, re.I))
+        if tm == 0:
+            checks.passed("no armed suite timers")
+        else:
+            checks.warn(f"{tm} suite/deadman timers armed")
     checks.row(kind="summary", fail=len(checks.failures))

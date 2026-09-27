@@ -286,3 +286,14 @@ def test_a_gate_that_raises_leaves_one_fail_row(rundir):
     assert record_raise(rundir, "T00-x", "gate", Fake(), "boom") is None and len(rundir.verdicts()) == 1
     # a diagnostic that raises gets one WARN, as before
     assert record_raise(rundir, "T00-d", "diagnostic", None, "boom") == "WARN" and rundir.verdicts()[-1]["status"] == "WARN"
+
+
+def test_netem_count_is_none_when_tc_fails(tmp_path, monkeypatch):
+    from suitelib.cluster import Cluster
+    fake = tmp_path / "tc"
+    fake.write_text("#!/bin/sh\necho 'RTNETLINK answers: Operation not permitted' >&2\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+    assert Cluster.netem_count() is None
+    fake.write_text("#!/bin/sh\necho 'qdisc noqueue 0: dev lo root refcnt 2'\n")
+    assert Cluster.netem_count() == 0

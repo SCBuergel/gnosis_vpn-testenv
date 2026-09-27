@@ -12,7 +12,8 @@ receivers:
 # churn constantly, so the series count only ever grows (52 sessions = 270 series = 53 % of the exit's metrics
 # within one run). The collector must therefore be able to shed load rather than buffer it forever.
 processors:
-  # Hard ceiling. Above soft_limit the collector refuses new data; above the spike allowance it drops.
+  # Hard ceiling. Above limit_mib - spike_limit_mib (384 MiB, the soft limit) the collector refuses new data; above
+  # limit_mib (512) it drops.
   # Dropping metrics is strictly better than killing the test run that produced them.
   memory_limiter:
     check_interval: 1s
