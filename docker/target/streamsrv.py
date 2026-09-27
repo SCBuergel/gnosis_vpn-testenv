@@ -18,6 +18,8 @@ from udpserver import bind_udp, quantiles_ms, stall_stats
 def serve(port, sock=None):
     s = sock or bind_udp(port)
     print(f"streamsrv udp 0.0.0.0:{port}", flush=True)
+    # every reader and writer of ul, dl_started and dl_addr holds `lock`: the receive loop's CTLD and KEEP handlers
+    # and each stream thread's cleanup (which takes it only at its end, so starting a stream under the lock cannot deadlock)
     ul, dl_started, dl_addr, lock = {}, set(), {}, threading.Lock()
 
     def dl_stream(addr, sid, pps, size, dur):
@@ -66,16 +68,18 @@ def serve(port, sock=None):
                 st["last"] = now
         elif tag == b"CTLD" and len(d) >= 20:
             sid, pps, size, dur = struct.unpack("!IfII", d[4:20])
-            dl_addr[sid] = a
-            if sid not in dl_started:
-                dl_started.add(sid)
-                threading.Thread(target=dl_stream, args=(a, sid, pps, size, dur), daemon=True).start()
-                print(f"DL start sid={sid} {a} pps={pps} size={size} dur={dur}", flush=True)
+            with lock:
+                dl_addr[sid] = a
+                if sid not in dl_started:
+                    dl_started.add(sid)
+                    threading.Thread(target=dl_stream, args=(a, sid, pps, size, dur), daemon=True).start()
+                    print(f"DL start sid={sid} {a} pps={pps} size={size} dur={dur}", flush=True)
         elif tag == b"KEEP" and len(d) >= 8:
             sid = struct.unpack("!I", d[4:8])[0]
-            if sid in dl_started and dl_addr.get(sid) != a:
-                print(f"DL sid={sid} requester moved {dl_addr.get(sid)} -> {a}", flush=True)
-                dl_addr[sid] = a
+            with lock:   # a KEEP racing the stream's cleanup must not re-insert a finished session
+                if sid in dl_started and dl_addr.get(sid) != a:
+                    print(f"DL sid={sid} requester moved {dl_addr.get(sid)} -> {a}", flush=True)
+                    dl_addr[sid] = a
         elif tag == b"UPRQ" and len(d) >= 20:
             sid, sent, send_end = struct.unpack("!IId", d[4:20])
             with lock:
