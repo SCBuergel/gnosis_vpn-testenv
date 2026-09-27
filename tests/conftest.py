@@ -15,6 +15,10 @@ from pathlib import Path
 
 import pytest
 
+if sys.version_info < (3, 11):
+    # tomllib (suitelib.tomlcfg) needs 3.11; say so here, where the suite starts, instead of an ImportError deep in a test
+    raise SystemExit(f"the suite needs Python 3.11 or newer (tomllib); found {sys.version_info.major}.{sys.version_info.minor}")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from suitelib import client as clientlib  # noqa: E402
 from suitelib.cluster import Cluster  # noqa: E402

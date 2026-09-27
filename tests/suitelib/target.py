@@ -123,14 +123,16 @@ def summary_row(s):
 
 def ping_rtts(client, host, count, interval=1, wait=3):
     """In-tunnel ping RTTs (ms) from the client."""
-    txt = client.out(f"ping -c {int(count)} -i {interval} -W {wait} {shlex.quote(str(host))} 2>/dev/null | grep -oE 'time=[0-9.]+' | cut -d= -f2",
+    count, interval, wait = int(count), float(interval), float(wait)   # once: the command and the timeout use the same numbers
+    txt = client.out(f"ping -c {count} -i {interval} -W {wait} {shlex.quote(str(host))} 2>/dev/null | grep -oE 'time=[0-9.]+' | cut -d= -f2",
                      timeout=count * (interval + wait) + 30)
     return [float(x) for x in txt.split()]
 
 
 def ping_avg(client, host, count=5, interval=0.2, wait=2):
     """Average RTT (ms) from ping's summary line, or None."""
-    txt = client.out(f"ping -c {int(count)} -i {interval} -W {wait} {shlex.quote(str(host))} 2>/dev/null | sed -n 's|.*= \\([0-9.]*\\)/\\([0-9.]*\\)/.*|\\2|p'",
+    count, interval, wait = int(count), float(interval), float(wait)
+    txt = client.out(f"ping -c {count} -i {interval} -W {wait} {shlex.quote(str(host))} 2>/dev/null | sed -n 's|.*= \\([0-9.]*\\)/\\([0-9.]*\\)/.*|\\2|p'",
                      timeout=count * (interval + wait) + 30)
     try:
         return float(txt)
