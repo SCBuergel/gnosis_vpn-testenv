@@ -168,6 +168,11 @@ def test_tomlcfg_set_and_keep(tmp_path):
     t = f.read_text()
     assert "x = 9" in t and "[c]" in t and "y = 2" in t
     assert tomlcfg.section_value(f, "[a]", "x") == "9"
+    g = tmp_path / "c.toml"
+    g.write_text('[connection.wg]\ntarget = "127.0.0.1:51821" # the exit\nname = \'single\'\nport = 51820\n')
+    assert tomlcfg.section_value(g, "[connection.wg]", "target") == "127.0.0.1:51821"   # not the comment, not the quotes
+    assert tomlcfg.section_value(g, "[connection.wg]", "name") == "single" and tomlcfg.section_value(g, "[connection.wg]", "port") == "51820"
+    assert tomlcfg.section_value(g, "[connection.wg]", "missing") is None and tomlcfg.section_value(g, "[nope]", "x") is None
     g = tmp_path / "d.toml"
     g.write_text('[destinations.a]\naddress = "1"\n\n[destinations.b]\naddress = "2"\n\n[connection]\nk = 1\n')
     tomlcfg.keep_destinations(g, 1)

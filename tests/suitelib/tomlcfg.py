@@ -1,6 +1,7 @@
 """Line-based TOML section editing for client-config cells (T11-capability-matrix, T12-balancer-sweep).
 Sections are matched on the exact header line. No table-array support."""
 import re
+import tomllib
 
 
 def _blocks(lines):
@@ -51,17 +52,16 @@ def keep_destinations(path, n):
 
 
 def section_value(path, header, key):
-    """The value of key inside the section, or None."""
-    inside = False
-    with open(path) as fh:
-        lines = fh.read().split("\n")
-    for line in lines:
-        s = line.strip()
-        if s.startswith("["):
-            inside = s == header
-            continue
-        if inside:
-            m = re.match(rf"^{re.escape(key)}\s*=\s*(.*)$", s)
-            if m:
-                return m.group(1).strip().strip('"')
-    return None
+    """The value of key inside the section ("[a.b]"), as a string, or None when the section or key is missing.
+    Read with tomllib, so an inline comment, a single-quoted string or an escape is handled by the parser (the
+    line-based read used to strip only double quotes and returned `127.0.0.1:51821" # comment` for a commented
+    line); the editing functions above stay line-based on purpose, to keep the file's layout."""
+    with open(path, "rb") as fh:
+        node = tomllib.load(fh)
+    for part in header.strip().strip("[]").split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    if not isinstance(node, dict) or key not in node:
+        return None
+    return str(node[key])
