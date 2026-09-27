@@ -49,7 +49,7 @@ Read before changing `tests/`. One line per rule: what to do, then the incident 
 
 ## Versions and builds
 
-- hoprd 4.1.x: branch `release/4.1` (tag `v4.1.2` is on the 5.0 line and its localcluster writes a config 4.x rejects); 4.0.3: tag `v4.0.3`. Build the localcluster from the same tree as the hoprd binary.
+- hoprd 4.1.x: branch `release/4.1` of `hoprnet/hoprd` (the 4.x line lives there, not in `hoprnet/hoprnet`, which holds the core crates and only `release/4.0`; tag `v4.1.2` is on the 5.0 line and its localcluster writes a config 4.x rejects); 4.0.3: tag `v4.0.3`. Build the localcluster from the same tree as the hoprd binary.
 - `HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64` is a no-op from `release/4.1 @ 60269a3` (it worked around hoprnet #8246 before); a run with it is not a different configuration. The #8425 pool arbiter has no config surface and made no difference in an A/B (6/6 vs 6/6).
 - Client: `release/hoprdv4` is the 4.x line, `main` the 0.101/5.x line.
 - The suite runs the upstream images (`just build-client`, `just build-server`, both `nix build`), the configuration that ships; a cargo build in another image is for bisecting and is not release evidence.
