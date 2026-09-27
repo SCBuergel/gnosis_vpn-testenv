@@ -5,11 +5,10 @@ import subprocess
 import sys
 import urllib.request
 
-from suitelib.verdicts import read_jsonl
 from pathlib import Path
 
 from . import shell
-from .verdicts import log
+from .verdicts import log, read_jsonl
 
 
 class Cluster:
