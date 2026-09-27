@@ -295,5 +295,6 @@ def test_netem_count_is_none_when_tc_fails(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
     assert Cluster.netem_count() is None
+    assert Cluster.netem_status() == (None, "RTNETLINK answers: Operation not permitted")
     fake.write_text("#!/bin/sh\necho 'qdisc noqueue 0: dev lo root refcnt 2'\n")
     assert Cluster.netem_count() == 0

@@ -157,10 +157,9 @@ def test_topology_preconditions(cfg, run, client, cluster, checks, knobs):
     # host hygiene
     # a check that could not run must not read as clean: tc or systemctl failing is a WARN naming the reason, not a
     # PASS (a missing tc on a host that never impairs is not a broken stack, so not a FAIL either)
-    q = cluster.netem_count()
+    q, why = cluster.netem_status()
     if q is None:
-        r = shell.run("tc qdisc show", timeout=30)
-        checks.warn(f"netem check unavailable: {(r.stderr or r.stdout).strip().splitlines()[0][:120] if (r.stderr or r.stdout).strip() else 'tc exited ' + str(r.returncode)}")
+        checks.warn(f"netem check unavailable: {why}")
     else:
         checks.verdict(q == 0, f"{q} netem qdisc(s) on host" if q else "no netem qdisc on host")
     r = shell.run("systemctl list-timers --all", timeout=30)

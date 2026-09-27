@@ -152,13 +152,19 @@ class Cluster:
         shell.run(["tc", "qdisc", "del", "dev", self.cfg.netem_iface, "root"], timeout=30)
 
     @staticmethod
-    def netem_count():
-        """netem qdiscs on the host, or None when tc could not answer (missing, no permission): the caller must not
-        read a failed check as "none", which is what shell.out's "" on a non-zero exit used to give."""
+    def netem_status():
+        """(netem qdiscs on the host, "") or (None, reason) when tc could not answer (missing, no permission): the
+        caller must not read a failed check as "none", which is what shell.out's "" on a non-zero exit used to give.
+        One tc call: the reason travels with the None."""
         r = shell.run("tc qdisc show", timeout=30)
         if r.returncode != 0:
-            return None
-        return r.stdout.count("netem")
+            err = (r.stderr or r.stdout).strip().splitlines()
+            return None, (err[0][:120] if err else f"tc exited {r.returncode}")
+        return r.stdout.count("netem"), ""
+
+    @staticmethod
+    def netem_count():
+        return Cluster.netem_status()[0]
 
     # -- sampler ---------------------------------------------------------------------------------------------
     def sampler(self, run, name, interval=1, containers=()):
