@@ -74,7 +74,15 @@ def up(args):
                CLIENT_COUNT=str(lay["n"]), SERVER_COUNT=str(lay["n"]))
     down_env = dict(env, SERVER_COUNT=str(max(8, lay["n"])))      # whatever ran before, its servers go too
     just(down_env, "down", timeout=600)
-    just(env, "metrics-start", "cluster-start", "cluster-wait", "server-start", "gen-config", "target-start", timeout=1800)
+    try:
+        just(env, "metrics-start", "cluster-start", "cluster-wait", "server-start", "gen-config", "target-start", timeout=1800)
+    except SystemExit:
+        # the earliest node error, not the localcluster's timeout: a config the hoprd binary rejects reads as /startedz timing out
+        log = Path(env.get("DATA_DIR") or "/tmp/hopr-nodes") / "logs" / "hoprd_0.log"
+        errs = [line for line in (log.read_text(errors="replace").splitlines() if log.exists() else []) if "ERROR" in line]
+        for line in errs[:3]:
+            say("  node-0:", line[:300])
+        raise
     cfg = Config(env)
     cluster = Cluster(cfg)
     status = cluster.status()
