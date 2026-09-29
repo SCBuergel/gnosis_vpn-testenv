@@ -109,3 +109,9 @@ def test_stale_reason_names_a_later_cluster_or_none():
     assert "node-2" in relaytopo.stale_reason(topo, later)
     assert "3 nodes" in relaytopo.stale_reason(topo, running(status(3, 3)))      # the standard stack after `just up-nobuild`
     assert relaytopo.stale_reason(topo, None) == "no running localcluster"
+
+
+def test_attribution_floor_rounds_up():
+    from suitelib.relaybench import attribution_floor
+    assert attribution_floor(25_000_000, 1000) == 25_000
+    assert attribution_floor(1001, 1000) == 2

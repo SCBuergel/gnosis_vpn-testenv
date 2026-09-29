@@ -9,8 +9,10 @@ the rungs. Each transfer runs under curl's CAP; a rung passes iff every transfer
 
 Recorded next to the rates: host CPU (all cores, /proc/stat) and each relay's and exit's hoprd CPU over each phase,
 because on one host the machine is the likely ceiling and the baseline is only readable next to it; each relay's
-forwarded-packet count over the download, which shows the traffic crossed the assigned relay and no other
-(ATTRIB_MIN_PCT of the relayed packets on the rung's relays); reconnects next to tunnel-ping timeouts."""
+forwarded-packet count over the download, which shows the traffic crossed the assigned relays: they forwarded at
+least one packet per PKT_BYTES_MAX downloaded bytes (a HOPR packet carries less, so a download that bypassed the relays
+fails it), and, with more than one relay in the topology, ATTRIB_MIN_PCT of all relayed packets were on the rung's own
+relays (with one relay that share is 100 % by construction and is not scored); reconnects next to tunnel-ping timeouts."""
 import os
 import statistics as st
 import time
@@ -23,7 +25,7 @@ from .target import curl_down, curl_up
 from .verdicts import log, utc_now
 
 KNOBS = dict(LADDER="1 2 3 4 5", DOWN_BYTES=25000000, UP_BYTES=25000000, CAP=180, IDLE_S=10, PAUSE_S=10,
-             RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90)
+             RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90, PKT_BYTES_MAX=1000)
 
 
 def timeout(knobs, connect_timeout=240):
@@ -90,6 +92,12 @@ def _phase(group, fn, pids):
         res = _parallel(fn, group)
         wall = time.time() - t0
     return res, round(wall, 2), cpu
+
+
+def attribution_floor(nbytes, pkt_bytes_max):
+    """Fewest packets the relays must have forwarded for nbytes to have crossed them: a HOPR packet carries at most
+    pkt_bytes_max bytes of payload, so fewer means some of the download took another route."""
+    return -(-int(nbytes) // int(pkt_bytes_max))
 
 
 def _mbit(nbytes, secs):
@@ -223,8 +231,15 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
         if attrib_pct is None:
             checks.warn(f"n={n}: no {k.RELAY_METRIC} counts from the relays; attribution not checked (RELAY_METRIC)")
         else:
-            checks.assert_min(f"n={n}: share of relayed packets on the rung's relay(s) {['node-%d' % r for r in mine]} "
-                              f"({on_mine} of {tot})", attrib_pct, "%", "ATTRIB_MIN_PCT", k.ATTRIB_MIN_PCT)
+            relays_named = ['node-%d' % r for r in mine]
+            want = attribution_floor(sum(r["bytes"] for r in down), k.PKT_BYTES_MAX)
+            checks.assert_min(f"n={n}: packets forwarded by {relays_named} during the download (floor: one per "
+                              f"{k.PKT_BYTES_MAX} B downloaded = {want})", on_mine, "packets", "floor", want)
+            if len(topo["relays"]) > 1:
+                checks.assert_min(f"n={n}: share of relayed packets on the rung's relay(s) {relays_named} "
+                                  f"({on_mine} of {tot})", attrib_pct, "%", "ATTRIB_MIN_PCT", k.ATTRIB_MIN_PCT)
+            else:
+                checks.record(f"n={n}: one relay in the topology, share of relayed packets not scored ({on_mine} forwarded)")
         checks.record(f"n={n}: down {rung['down_avg_mbit']} Mbit/s per client (min {rung['down_min_mbit']}), "
                       f"aggregate {rung['down_agg_mbit']}; up {rung['up_avg_mbit']} per client, aggregate {rung['up_agg_mbit']}; "
                       f"host CPU {rung['host_cpu_down_pct']} % down / {rung['host_cpu_up_pct']} % up, "
