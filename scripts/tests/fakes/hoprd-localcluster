@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Fake hoprd-localcluster for the offline scripts/testenv suites: only `status --data-dir <dir>` is
+# implemented, emitting the JSON in $FAKE_LC_STATUS (or a two-node running fixture when unset).
+set -u
+
+[ "${1:-}" = "status" ] || {
+    echo "fake hoprd-localcluster: only 'status' is implemented, got '${1:-}'" >&2
+    exit 2
+}
+
+if [ -n "${FAKE_LC_STATUS:-}" ]; then
+    printf '%s\n' "${FAKE_LC_STATUS}"
+    exit 0
+fi
+
+cat <<'JSON'
+{
+  "state": "running",
+  "blokli_url": "http://localhost:8080",
+  "nodes": [
+    { "id": "0", "address": "0xAAA", "p2p": "172.30.0.1:9000" },
+    { "id": "1", "address": "0xBBB", "p2p": "172.30.0.1:9001" }
+  ],
+  "extras": []
+}
+JSON

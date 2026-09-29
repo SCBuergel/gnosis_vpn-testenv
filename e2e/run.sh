@@ -32,7 +32,7 @@ GVPN_BLOKLI_URL="${GVPN_BLOKLI_URL:-}"
 WORKER_USER="${WORKER_USER:-gnosisvpn-dev}"
 SPAWN_HOME="${SPAWN_HOME:-/tmp/gnosis_vpn-e2e-home}"
 SPAWN_LOG="${SPAWN_LOG:-/tmp/gnosis_vpn-e2e-daemon.log}"
-SPAWN_READY_TRIES="${SPAWN_READY_TRIES:-150}"   # x2s; a real network takes longer to reach Running than a localcluster
+SPAWN_READY_TRIES="${SPAWN_READY_TRIES:-150}" # x2s; a real network takes longer to reach Running than a localcluster
 SPAWNED_DAEMON=0
 SUDO_KEEPALIVE_PID=""
 

@@ -313,7 +313,7 @@ Standalone bash tooling under [`scripts/`](scripts/README.md), independent of th
 | `E2E_IMAGE`               | `gnosis_vpn-e2e`                                                          | Tag for the e2e browser sidecar image           |
 | `E2E_OUT_DIR`             | `/tmp/gnosis_vpn-testenv-e2e`                                             | Parent directory for e2e run output             |
 | `CLUSTER_ENABLE_PIX`      | unset                                                                     | Non-empty: `--enable-pix` + PIX client config   |
-| `CLUSTER_PIX_POOL`        | `test`                                                                    | PIX pool: `test`, or `curvy` (see above)        |
+| `CLUSTER_PIX_POOL`        | unset                                                                     | PIX pool: `test`, or `curvy` (see above)        |
 | `CURVY_GATEWAY_PORT`      | `3900`                                                                    | Curvy gateway port (relayer, indexer)           |
 | `HOPRD_BIN`               | `$HOPRD_DIR/result-hoprd/bin/hoprd` (`result-hoprd-pix-curvy` for curvy)  | hoprd node binary the localcluster spawns       |
 | `LOCALCLUSTER_BIN`        | `$HOPRD_DIR/result-localcluster/bin/hoprd-localcluster`                   | Localcluster binary (override with `HOPRD_BIN`) |
@@ -389,6 +389,19 @@ The client container publishes no ports — it only needs egress (to the localcl
 | otelcol OTLP/HTTP      | TCP      | `4318`      |
 | VictoriaMetrics PromQL | TCP      | `8428`      |
 
+## Where the recipes live
+
+`just --list` is the UI, but the recipes themselves are one-liners: each
+dispatches into [`scripts/testenv/`](scripts/testenv/), one file per domain
+(`cluster.sh`, `client.sh`, `config.sh`, `summary.sh`, …) with a subcommand per
+recipe, so `shellcheck` and `shfmt` gate the orchestration logic on every PR.
+`set export := true` hands every justfile variable to those scripts as an
+environment variable; each file declares what it reads at the top with
+`: "${VAR:?}"`. See [`scripts/README.md`](scripts/README.md).
+
+The standalone tooling in `scripts/*.sh` is a separate thing — operator scripts
+meant to be copied onto a machine with a running client.
+
 ## Utility recipes
 
 | Recipe                     | What it does                                                                   |
@@ -459,9 +472,10 @@ On hosts running a default-deny host firewall (e.g. NixOS's `networking.firewall
 - This testenv gives the exit's `wggvpn` the `10.128.0.1` address as an alias (`SERVER_PING_ALIAS`), so that hardcoded tunnel ping is answered and sessions stay up; T01-topology-preconditions checks both addresses and T06-realtime-udp's idle arm measures it.
 - PIX _settles_ only if the exit also runs the `Pix` strategy, which is opt-in
   and not part of hoprd's default strategy set.
-  `hoprd-localcluster --enable-pix` adds it, but its demo geometry caps the
-  accepted per-SSA quota at 1 MiB, and gnosis_vpn-client offers hopr-lib's
-  default ≈649 MiB — so that flag cannot serve this client as it stands, and the
-  recipes don't pass it. Without it the exit accepts PIX sessions (its default
-  quota window covers the client's offer) but never observes the deposits the
-  client makes.
+  `hoprd-localcluster --enable-pix` adds it, and its demo geometry caps the
+  accepted per-SSA quota at 1 MiB — well under hopr-lib's default ≈649 MiB, so
+  the client has to be sized down to match. `up-pix` does both halves:
+  `--enable-pix` on the cluster and `templates/pix-on.toml.tpl` on the client
+  (see "PIX" above). Plain `up` passes neither, so its exits accept PIX sessions
+  (their default quota window covers the client's offer) but never observe the
+  deposits the client makes.

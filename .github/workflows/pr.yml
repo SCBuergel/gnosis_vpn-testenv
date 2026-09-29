@@ -24,11 +24,26 @@ jobs:
       audit: false
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+  scripts-tests:
+    name: Script tests
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    runs-on: depot-ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Run bats suite
+        uses: hoprnet/hopr-workflows/actions/nix-action@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # nix-action-v1.1.3
+        with:
+          source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+          cachix_cache_name: hoprnet
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          command: nix develop -c just test-scripts
   ci-ok:
     name: CI OK
     # Single required status check: stable across matrix expansion, label gating and fork guards.
     if: always() # a skipped job counts as passing, so never let a failed dependency skip this one
-    needs: [checks]
+    needs: [checks, scripts-tests]
     runs-on: depot-ubuntu-22.04-4
     permissions: {}
     steps:

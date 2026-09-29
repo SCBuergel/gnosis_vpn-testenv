@@ -66,11 +66,26 @@ CURVY_FEE_CEILING_BPS="${CURVY_FEE_CEILING_BPS:-100}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-    --seconds) PING_SECONDS="$2"; shift 2 ;;
-    --destination) DESTINATION="$2"; shift 2 ;;
-    --ping-size) PING_SIZE="$2"; shift 2 ;;
-    -h | --help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    --seconds)
+        PING_SECONDS="$2"
+        shift 2
+        ;;
+    --destination)
+        DESTINATION="$2"
+        shift 2
+        ;;
+    --ping-size)
+        PING_SIZE="$2"
+        shift 2
+        ;;
+    -h | --help)
+        sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    *)
+        echo "unknown argument: $1" >&2
+        exit 2
+        ;;
     esac
 done
 
@@ -85,7 +100,10 @@ status_json() { "$LOCALCLUSTER_BIN" status --data-dir "$DATA_DIR" 2>/dev/null; }
 # it or not depending on version, so both spellings have to match.
 metric() { # metric <scrape file> <name> [<label substring>]
     local file="$1" name="$2" label="${3:-}" lines
-    [ -r "$file" ] || { echo 0; return; }
+    [ -r "$file" ] || {
+        echo 0
+        return
+    }
     lines=$(grep -E "^${name}(_total)?[ {]" "$file" 2>/dev/null)
     [ -n "$label" ] && lines=$(printf '%s\n' "$lines" | grep -F -- "$label")
     printf '%s\n' "$lines" | awk '{ s += $NF } END { printf "%.0f", s + 0 }'
@@ -132,7 +150,7 @@ check() { # check <ok?> <description> <detail>
 cleanup() {
     [ -n "${CONNECTED:-}" ] || return 0
     echo "-- disconnect"
-    ctl disconnect > /dev/null 2>&1
+    ctl disconnect >/dev/null 2>&1
     wait_for is_disconnected "$DISCONNECT_TIMEOUT" "disconnect" || true
 }
 trap cleanup EXIT
@@ -140,10 +158,16 @@ trap cleanup EXIT
 # ─── Preflight ─────────────────────────────────────────────────────────────────
 
 for cmd in jq curl bc docker; do
-    command -v "$cmd" > /dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
+    command -v "$cmd" >/dev/null 2>&1 || {
+        echo "missing required command: $cmd" >&2
+        exit 2
+    }
 done
 
-[ -x "$LOCALCLUSTER_BIN" ] || { echo "hoprd-localcluster not found at $LOCALCLUSTER_BIN — run 'just build-cluster'" >&2; exit 2; }
+[ -x "$LOCALCLUSTER_BIN" ] || {
+    echo "hoprd-localcluster not found at $LOCALCLUSTER_BIN — run 'just build-cluster'" >&2
+    exit 2
+}
 
 if [ "$(status_json | jq -r '.state // "not_running"')" != "running" ]; then
     echo "cluster is not running — run 'just up-pix' first" >&2
@@ -167,7 +191,10 @@ fi
 case "$POOL" in
 test) SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-180}" ;;
 curvy) SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-300}" ;;
-*) echo "CLUSTER_PIX_POOL must be 'test' or 'curvy', got '$POOL'" >&2; exit 2 ;;
+*)
+    echo "CLUSTER_PIX_POOL must be 'test' or 'curvy', got '$POOL'" >&2
+    exit 2
+    ;;
 esac
 
 # Both halves of the switch, checked separately so the error says which one is wrong. A cluster
@@ -194,7 +221,7 @@ PRICE_PER_BYTE=$(grep -A3 '^\[pix_strategy\]' "${CONFIG_DIR}/client.toml" | awk 
 
 # PACKET_PAYLOAD_SIZE — hopr-lib's HoprPacket::PAYLOAD_SIZE.
 PAYLOAD_SIZE=1038
-QUOTA=$(( NUM_SSA_PARTS * (SSA_PART_SIZE + ADDITIONAL_SHARES) * PAYLOAD_SIZE ))
+QUOTA=$((NUM_SSA_PARTS * (SSA_PART_SIZE + ADDITIONAL_SHARES) * PAYLOAD_SIZE))
 PER_CYCLE=$(calc "$PRICE_PER_BYTE * $QUOTA")
 
 # ─── Resolve the exit ──────────────────────────────────────────────────────────
@@ -208,7 +235,10 @@ ready_destination() {
         .Status.destinations[]
         | select(.route_health.state.state == "ReadyToConnect")
         | .destination.id' | head -1)
-    [ -n "$id" ] && { READY_ID="$id"; return 0; }
+    [ -n "$id" ] && {
+        READY_ID="$id"
+        return 0
+    }
     return 1
 }
 wait_for ready_destination "$READY_TIMEOUT" "a ready destination" || exit 1
@@ -217,12 +247,19 @@ DEST="${DESTINATION:-$READY_ID}"
 # The destination id is `node-N` for a localcluster exit, and N indexes the status JSON.
 EXIT_IDX="${DEST#node-}"
 EXIT_API=$(status_json | jq -r --argjson i "$EXIT_IDX" '.nodes[] | select(.id == $i) | .api_url')
-[ -n "$EXIT_API" ] && [ "$EXIT_API" != "null" ] || { echo "could not resolve an API url for '$DEST'" >&2; exit 2; }
+[ -n "$EXIT_API" ] && [ "$EXIT_API" != "null" ] || {
+    echo "could not resolve an API url for '$DEST'" >&2
+    exit 2
+}
 
-SCRAPE_BEFORE=$(mktemp); SCRAPE_AFTER=$(mktemp)
+SCRAPE_BEFORE=$(mktemp)
+SCRAPE_AFTER=$(mktemp)
 trap 'rm -f "$SCRAPE_BEFORE" "$SCRAPE_AFTER"; cleanup' EXIT
-curl -s --max-time 5 "${EXIT_API}/metrics" > "$SCRAPE_BEFORE" 2>/dev/null
-[ -s "$SCRAPE_BEFORE" ] || { echo "could not scrape ${EXIT_API}/metrics" >&2; exit 2; }
+curl -s --max-time 5 "${EXIT_API}/metrics" >"$SCRAPE_BEFORE" 2>/dev/null
+[ -s "$SCRAPE_BEFORE" ] || {
+    echo "could not scrape ${EXIT_API}/metrics" >&2
+    exit 2
+}
 
 echo "== PIX system test =================================================="
 printf '  exit:            %s (%s)\n' "$DEST" "$EXIT_API"
@@ -241,13 +278,16 @@ echo "====================================================================="
 CLIENT_SAFE_BEFORE_CONNECT=$(client_safe_wxhopr)
 
 echo "-- connect ${DEST}"
-ctl connect "$DEST" > /dev/null || { echo "connect rejected" >&2; exit 1; }
+ctl connect "$DEST" >/dev/null || {
+    echo "connect rejected" >&2
+    exit 1
+}
 wait_for is_connected_to "$CONNECT_TIMEOUT" "connect ${DEST}" "$DEST" || exit 1
 CONNECTED=1
 
 # Baseline *after* connecting: the cluster stakes its channels out of the same Safe during bootstrap,
 # and a baseline taken before that settles reports the staking as negative PIX income.
-curl -s --max-time 5 "${EXIT_API}/metrics" > "$SCRAPE_BEFORE" 2>/dev/null
+curl -s --max-time 5 "${EXIT_API}/metrics" >"$SCRAPE_BEFORE" 2>/dev/null
 GENERATED_BEFORE=$(metric "$SCRAPE_BEFORE" hopr_strategy_pix_deposit_data 'outcome="generated"')
 SWEEPS_BEFORE=$(metric "$SCRAPE_BEFORE" hopr_strategy_pix_sweeps)
 KEYS_BEFORE=$(metric "$SCRAPE_BEFORE" hopr_strategy_pix_keys_recovered)
@@ -266,15 +306,17 @@ RECEIVED=$(printf '%s\n' "$PING_OUT" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) packets
 [ -n "$RECEIVED" ] || RECEIVED=$(printf '%s\n' "$PING_OUT" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) received.*/\1/p' | head -1)
 RECEIVED="${RECEIVED:-0}"
 # ICMP payload + 8 B ICMP header + 20 B IPv4 header is what actually crossed the tunnel.
-DELIVERED=$(( RECEIVED * (PING_SIZE + 28) ))
+DELIVERED=$((RECEIVED * (PING_SIZE + 28)))
 printf '   %s replies, %s B delivered downstream\n' "$RECEIVED" "$DELIVERED"
 
 # ─── Settle ────────────────────────────────────────────────────────────────────
 
 echo "-- waiting for in-flight cycles to settle"
-last=-1; stable=0; waited=0
+last=-1
+stable=0
+waited=0
 while [ "$waited" -lt "$SETTLE_TIMEOUT" ]; do
-    curl -s --max-time 5 "${EXIT_API}/metrics" > "$SCRAPE_AFTER" 2>/dev/null
+    curl -s --max-time 5 "${EXIT_API}/metrics" >"$SCRAPE_AFTER" 2>/dev/null
     now=$(metric "$SCRAPE_AFTER" hopr_strategy_pix_sweeps)
     if [ "$now" = "$last" ]; then
         stable=$((stable + 1))
@@ -294,10 +336,10 @@ GENERATED_AFTER=$(metric "$SCRAPE_AFTER" hopr_strategy_pix_deposit_data 'outcome
 EXIT_SAFE_AFTER=$(exit_balance safeHopr)
 CLIENT_SAFE_AFTER=$(client_safe_wxhopr)
 
-N=$(( SWEEPS_AFTER - SWEEPS_BEFORE ))
-KEYS=$(( KEYS_AFTER - KEYS_BEFORE ))
-CONFIRMED=$(( CONFIRMED_AFTER - CONFIRMED_BEFORE ))
-GENERATED=$(( GENERATED_AFTER - GENERATED_BEFORE ))
+N=$((SWEEPS_AFTER - SWEEPS_BEFORE))
+KEYS=$((KEYS_AFTER - KEYS_BEFORE))
+CONFIRMED=$((CONFIRMED_AFTER - CONFIRMED_BEFORE))
+GENERATED=$((GENERATED_AFTER - GENERATED_BEFORE))
 EXIT_GAIN=$(calc "$EXIT_SAFE_AFTER - $EXIT_SAFE_BEFORE")
 CLIENT_SPENT=$(calc "$CLIENT_SAFE_BEFORE - $CLIENT_SAFE_AFTER")
 EXPECTED=$(calc "$N * $PER_CYCLE")
@@ -321,7 +363,7 @@ if [ "$POOL" = "curvy" ]; then
 else
     printf '  client safe:     %s -> %s  (-%s wxHOPR)\n' "$CLIENT_SAFE_BEFORE" "$CLIENT_SAFE_AFTER" "$CLIENT_SPENT"
 fi
-printf '  delivered:       %s B downstream, %s B covered by %s cycle(s)\n' "$DELIVERED" "$(( N * QUOTA ))" "$N"
+printf '  delivered:       %s B downstream, %s B covered by %s cycle(s)\n' "$DELIVERED" "$((N * QUOTA))" "$N"
 # Reported rather than asserted: with auto-redeeming on, ticket income can land in the same Safe, so
 # a ratio above the cycle count is legitimate. A whole number here is PIX and nothing else.
 if [ "$N" -gt 0 ] && [ "$POOL" = "curvy" ]; then
@@ -362,7 +404,7 @@ else
     check "$(ge "$CLIENT_SPENT" "$EXPECTED" && echo 1 || echo 0)" \
         "client paid what the exit earned" "-${CLIENT_SPENT} >= ${EXPECTED} wxHOPR"
 fi
-check "$([ "$DELIVERED" -ge "$(( N * QUOTA ))" ] && echo 1 || echo 0)" \
+check "$([ "$DELIVERED" -ge "$((N * QUOTA))" ] && echo 1 || echo 0)" \
     "income corresponds to data delivered" "${DELIVERED} B >= ${N} x ${QUOTA} B"
 echo "====================================================================="
 
