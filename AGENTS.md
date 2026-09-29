@@ -50,6 +50,7 @@ Read before changing `tests/`. One line per rule: what to do, then the incident 
 ## Versions and builds
 
 - hoprd 4.1.x: branch `release/4.1` of `hoprnet/hoprd` (the 4.x line lives there, not in `hoprnet/hoprnet`, which holds the core crates and only `release/4.0`; tags `v4.1.2` and `v4.1.3` are on the 5.0 line (hoprd 5.0.0-rc.1) and their localcluster writes a config 4.x rejects: "failed to parse config YAML", then `/startedz` times out); the 4.1.3 release binary is `release/4.1 @ a5887bc` ("Bump to version 4.1.3"), so build its localcluster there; 4.0.3: tag `v4.0.3`. Build the localcluster from the same tree as the hoprd binary.
+- T33-relay-baseline and T34-single-relay-scaling need their own stack (`just relay-topology paired|shared N`) and more than the stock localcluster's five nodes: build it with `patches/hoprd-localcluster-max16.patch`. The first attempt ran into the cap ("size must be between 1 and 5") and both tests SKIPped on no stack.
 - `HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64` is a no-op from `release/4.1 @ 60269a3` (it worked around hoprnet #8246 before); a run with it is not a different configuration. The #8425 pool arbiter has no config surface and made no difference in an A/B (6/6 vs 6/6).
 - Client: `release/hoprdv4` is the 4.x line, `main` the 0.101/5.x line.
 - The suite runs the upstream images (`just build-client`, `just build-server`, both `nix build`), the configuration that ships; a cargo build in another image is for bisecting and is not release evidence.

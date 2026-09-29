@@ -1,6 +1,6 @@
 # Regression test catalogue
 
-The suite in `tests/` runs 24 tests against a `gnosis_vpn-testenv` stack (localcluster, exit server, client containers, in-cluster traffic target) and keeps 8 runbook entries for investigations. Each test's method, criteria and the incident it comes from are in its module docstring (`tests/regression/test_tNN_<name>.py`); this file is the index: kind, group, knobs, what passes. Rules for changing the suite are in [AGENTS.md](../AGENTS.md), mechanics in [tests/README.md](../tests/README.md).
+The suite in `tests/` runs 24 tests, plus two relay-scaling gates that need a topology of their own, against a `gnosis_vpn-testenv` stack (localcluster, exit server, client containers, in-cluster traffic target) and keeps 8 runbook entries for investigations. Each test's method, criteria and the incident it comes from are in its module docstring (`tests/regression/test_tNN_<name>.py`); this file is the index: kind, group, knobs, what passes. Rules for changing the suite are in [AGENTS.md](../AGENTS.md), mechanics in [tests/README.md](../tests/README.md).
 
 ## Running it
 
@@ -9,9 +9,10 @@ just suite                    # the one run: T01 … T24 in file order
 just suite --fast             # shorter durations; every sustained arm stays ≥ 90 s
 just suite --very-fast        # 15 s arms, 1-2 MiB transfers: smoke only, cannot see a reconnect cycle
 just suite --only t04,t06     # T01 still runs first unless skipped explicitly
-just suite --group realtime   # one group (preflight, throughput, realtime, resilience, config, attribution, multiclient, endurance)
+just suite --group realtime   # one group (preflight, throughput, realtime, resilience, config, attribution, multiclient, endurance, relayscale)
 just suite --knob T23_DUR=150 # a per-test knob beats --very-fast; also as env T23_DUR=150
 just test t10                 # one test, including runbook entries
+just relay-topology paired 5 && just test t33   # T33-relay-baseline on its own topology (T34: `shared 5`, `t34`)
 just suite --client NAME --dest ID --target HOST --no-cluster   # a production exit; cluster-only checks skip
 just suite-selftest           # offline: library, target services, probe contracts
 ```
@@ -52,6 +53,8 @@ Every number a gate holds a measurement against is absolute and named; every p50
 | `SPLIT_TOL_PCT`, `SPLIT_MIN_PATHS` | 60 %, 1000 | T08-relay-attribution return-path skew at equal latency | 8-72 % skew | fails an 80/20 split and beyond; expected to fail on some healthy runs, kept as a signal by decision |
 | `UNSTABLE_PCT` | 50 % | T03-repeatability-baseline flag | 12.1 % | above it the stack cannot repeat its own numbers |
 | `LOG_MB_MIN_MAX` | 200 MB/min | T23-sustained-soak client log growth | 63-70 MB/min at path-planner debug | the incident was 1.6 GB/min |
+| `CAP` (T33, T34) | 180 s | T33-relay-baseline, T34-single-relay-scaling: every 25 MB transfer of a rung | not calibrated yet (first run 2026-09-29) | 25 MB in 180 s is 1.1 Mbit/s; a completion bound, not a rate threshold, until the ladder is calibrated |
+| `ATTRIB_MIN_PCT` | 90 % | T33-relay-baseline, T34-single-relay-scaling: share of forwarded packets on the rung's relays | 100 % on the 2026-09-29 trial | the topology leaves no other route; the margin is for probe traffic |
 
 ## The run
 
@@ -150,6 +153,20 @@ A `CALL_RATE`=1.5 Mbit/s call for `DUR`=3600 s (600; 60) plus a transfer pair ev
 ### T24-sustained-upload · **gate** · endurance
 
 Upload-only stream at `RATE`=3 Mbit/s for `DUR`=900 s (240; 25) at each of `MTUS`="default 940". PASS iff per MTU loss < 5 %, `reconnects`=0 and the client's undecodable counter grew by < 50; a missing server report is an UNMEASURED FAIL. Deadman covered.
+
+## Relay scaling
+
+Two gates that measure relays, not the client: each runs on a topology `just relay-topology MODE N` builds (it takes the stack down first) and SKIPs on any other stack, so in the one run they cost nothing. `tests/relay_topology.py` starts a localcluster with `--channel-management none`, one pre-funded identity, one VPN server and one config file per client, and pins every path through the channel graph: each client's strategy opens exactly one channel, to its relay (`[strategy]` `min_open_channels`=`target_open_channels`=1 and a one-peer `channel_allowlist`), and each exit gets exactly one channel, to the same relay, through its REST API. At one hop that fixes both directions, client → relay → exit and the return path exit → relay → client, since the final hop of a path needs no channel. `just relay-topology-check` holds the live graph against the saved layout. The stock `hoprd-localcluster` caps a cluster at five nodes (its five frozen identities); T33-relay-baseline at five clients needs ten, so build the localcluster with `patches/hoprd-localcluster-max16.patch` (random identities, which the cluster uses, deploy their Safes on chain at start and are not bound to the frozen set; up to 16 nodes). The hoprd binary under test is unchanged.
+
+The ladder (`suitelib/relaybench.py`), per rung of `LADDER`="1 2 3 4 5" clients: hold the chain's channel graph against the topology (every client and every exit exactly one Open channel, to its relay; anything else FAILs the rung before it runs), connect the rung's clients at once, wait `IDLE_S`=10 s (below `SURB_RAMP_WAIT` on purpose, by request: the first seconds of each transfer still ride the SURB ramp), download `DOWN_BYTES`=25000000 on every client at once, wait `PAUSE_S`=10 s, upload `UP_BYTES`=25000000 at once, disconnect, wait `PAUSE_S` before the next rung. A rung PASSes iff every transfer completes within `CAP`=180 s, and iff at least `ATTRIB_MIN_PCT`=90 % of the packets the relays forwarded during the download went through the rung's own relays (`RELAY_METRIC`=`hopr_packets_count{type="forwarded"}`). Rates are recorded, not scored, until they are calibrated: per-client mean and minimum, aggregate over the phase's wall time, host CPU (all cores) and each relay's hoprd CPU next to them, reconnects next to tunnel-ping timeouts. Each run writes `<TEST>.md`, one line per rung.
+
+### T33-relay-baseline · **gate** · relayscale
+
+`just relay-topology paired 5`: client k → relay k → exit k, as many relays and exits as clients (`CLUSTER_SIZE`=10). The baseline: on one host every relay shares the machine, so this ladder shows what the host allows.
+
+### T34-single-relay-scaling · **gate** · relayscale
+
+`just relay-topology shared 5`: every client through one relay to its own exit (`CLUSTER_SIZE`=6). Read against T33-relay-baseline at the same client count: where it falls below, the single relay is the limit, not the host.
 
 ## The runbook
 

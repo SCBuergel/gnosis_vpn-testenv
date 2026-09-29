@@ -1,0 +1,56 @@
+diff --git a/localcluster/src/identity.rs b/localcluster/src/identity.rs
+index 6224a0f..decdb91 100644
+--- a/localcluster/src/identity.rs
++++ b/localcluster/src/identity.rs
+@@ -39,7 +39,10 @@ pub const DEFAULT_PRIVATE_KEY: &str =
+ pub const DEFAULT_CONFIG_HOME: &str = "/tmp/hopr-nodes";
+ pub const DEFAULT_IDENTITY_PASSWORD: &str = "password";
+ pub const DEFAULT_NUM_NODES: usize = 3;
+-pub const MAX_NUM_NODES: usize = 5;
++/// Frozen node identities (NODE_SECRETS); a cluster with random identities may be larger, up to MAX_NUM_NODES.
++pub const FROZEN_NUM_NODES: usize = 5;
++/// testenv relay-scaling patch: random identities deploy their Safes on chain at start, so they are not bound to the frozen set.
++pub const MAX_NUM_NODES: usize = 16;
+ // Increased tx client timeout multiplier for Anvil
+ pub const DEFAULT_TX_TIMEOUT_MULTIPLIER: u32 = 10;
+ 
+@@ -130,7 +133,7 @@ fn frozen_hopr_keys(packet_key: [u8; 32], chain_key: [u8; 32]) -> anyhow::Result
+ }
+ 
+ /// Packet and chain secrets of the frozen cluster node identities.
+-const NODE_SECRETS: [([u8; 32], [u8; 32]); MAX_NUM_NODES] = [
++const NODE_SECRETS: [([u8; 32], [u8; 32]); FROZEN_NUM_NODES] = [
+     (
+         hex!("76a4edbc3f595d4d07671779a0055e30b2b8477ecfd5d23c37afd7b5aa83781d"),
+         hex!("71bf1f42ebbfcd89c3e197a3fd7cda79b92499e509b6fefa0fe44d02821d146a"),
+@@ -303,7 +306,7 @@ pub async fn generate(config: &GenerationConfig) -> anyhow::Result<GenerationOut
+         p2p_host = %p2p_host,
+         "per-identity funding target and pre-announcement host",
+     );
+-    let effective_num_nodes = config.num_nodes.clamp(1, NODE_SECRETS.len());
++    let effective_num_nodes = config.num_nodes.clamp(1, if config.random_identities { MAX_NUM_NODES } else { NODE_SECRETS.len() });
+     debug!(
+         requested = %config.num_nodes,
+         effective = %effective_num_nodes,
+@@ -353,10 +356,11 @@ pub async fn generate(config: &GenerationConfig) -> anyhow::Result<GenerationOut
+         home_dir = %home_path.display(),
+         "generating node identities",
+     );
+-    for (id, (packet_key, chain_key)) in NODE_SECRETS.iter().take(effective_num_nodes).enumerate() {
++    for id in 0..effective_num_nodes {
+         let kp = if config.random_identities {
+             HoprKeys::random()
+         } else {
++            let (packet_key, chain_key) = &NODE_SECRETS[id];
+             frozen_hopr_keys(*packet_key, *chain_key)
+                 .with_context(|| format!("frozen keys of node {id}"))?
+         };
+@@ -747,7 +751,7 @@ mod tests {
+     #[test]
+     fn frozen_identities_have_stable_addresses() -> anyhow::Result<()> {
+         /// `(EVM address, announced offchain key)` per frozen identity.
+-        const NODE_IDENTITIES: [(&str, &str); MAX_NUM_NODES] = [
++        const NODE_IDENTITIES: [(&str, &str); FROZEN_NUM_NODES] = [
+             (
+                 "0xb6624e92ee15dd38e2922379267ceffe002d4c46",
+                 "0x0f2cbb53ce007a69236dd74ad0b3e32438f52b0e79ab9cc54a16ca452bb4aed8",
