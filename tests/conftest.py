@@ -28,7 +28,7 @@ from suitelib.target import Target  # noqa: E402
 
 # Test groups (a module's GROUP): smaller targeted selections for one measurement at a time (`--group NAME`). The
 # default run is still every test in file order; a group changes what is selected, never the order.
-GROUPS = ("preflight", "throughput", "realtime", "resilience", "config", "attribution", "multiclient", "endurance")
+GROUPS = ("preflight", "throughput", "realtime", "resilience", "config", "attribution", "multiclient", "endurance", "relayscale")
 
 TEST_FILE = re.compile(r"test_(t\d\d)_")
 
@@ -81,7 +81,7 @@ def pytest_addoption(parser):
     g.addoption("--cell", default=None, help="label of the version/config cell (SUITE_CELL)")
     g.addoption("--only", default="", metavar="tNN,tNN", help="run only these tests (t01 still runs first)")
     g.addoption("--skip", default="", metavar="tNN,tNN", help="drop these tests")
-    g.addoption("--group", default="", metavar="NAME,NAME", help="run only these groups (preflight, throughput, realtime, "
+    g.addoption("--group", default="", metavar="NAME,NAME", help="run only these groups (preflight, throughput, realtime, relayscale, "
                 "resilience, config, attribution, multiclient, endurance); t01 still runs first")
     g.addoption("--runbook", action="store_true", help="also collect the runbook items t25 ... t32")
     g.addoption("--no-preconditions", action="store_true", help="do not force t01 in front of an --only selection")

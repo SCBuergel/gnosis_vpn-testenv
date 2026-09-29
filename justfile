@@ -256,6 +256,10 @@ gen-config-on-network: gen-config
 client-start: network-create
     @scripts/testenv/client.sh start
 
+# Start one client container: name, state dir, extra identity index, config file name in CONFIG_DIR (relay-topology)
+client-start-one name state_dir index config="client.toml": network-create
+    @scripts/testenv/client.sh start "{{name}}" "{{state_dir}}" "{{index}}" "{{config}}"
+
 # Start a second client container on extra identity 1 (needs EXTRA_IDENTITIES=2 at cluster start)
 client2-start: network-create
     @scripts/testenv/client.sh start gnosis_vpn-client-2 "{{CLIENT_STATE_DIR}}-2" 1
@@ -417,6 +421,15 @@ up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config tar
 
 # Restart only the cluster (new HOPRD_BIN / CLUSTER_ENV / CLUSTER_LATENCY), regenerate config, restart the client
 cluster-restart: client-stop cluster-stop cluster-start cluster-wait gen-config client-start
+
+# Take the stack down and bring up a relay-scaling topology: `paired N` (client k -> relay k -> exit k, T33-relay-baseline)
+# or `shared N` (N clients -> one relay -> N exits, T34-single-relay-scaling); one channel per client and per exit
+relay-topology mode n *args:
+    python3 "{{justfile_directory()}}/tests/relay_topology.py" up "{{mode}}" "{{n}}" {{args}}
+
+# Hold the live channel graph against CONFIG_DIR/relay-topology.json (exit 1 on any extra, missing or misrouted channel)
+relay-topology-check:
+    python3 "{{justfile_directory()}}/tests/relay_topology.py" check
 
 # Run the suite across version/config cells from a cells file (see tests/matrix.py --help)
 matrix cells *args:
