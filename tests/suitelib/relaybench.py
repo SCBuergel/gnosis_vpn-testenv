@@ -23,7 +23,7 @@ from .target import curl_down, curl_up
 from .verdicts import log, utc_now
 
 KNOBS = dict(LADDER="1 2 3 4 5", DOWN_BYTES=25000000, UP_BYTES=25000000, CAP=180, IDLE_S=10, PAUSE_S=10,
-             RELAY_METRIC="hopr_packets_count", ATTRIB_MIN_PCT=90)
+             RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90)
 
 
 def timeout(knobs, connect_timeout=240):
