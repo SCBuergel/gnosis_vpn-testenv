@@ -96,6 +96,23 @@ def load(config_dir):
         return None
 
 
+def stale_reason(topo, status):
+    """Why a saved topology does not describe the running cluster, or "" when it does. `just down` leaves
+    relay-topology.json in CONFIG_DIR; a later standard stack (`just up-nobuild`) must not be held against it, or a
+    plain `just suite` would fail T33/T34's channel check on a cluster they were never meant for. Every localcluster
+    start draws new node identities, so the node addresses tell one cluster from the next."""
+    if not status or status.get("state") != "running":
+        return "no running localcluster"
+    live = {str(nd.get("id")): str(nd.get("address") or "").lower() for nd in status.get("nodes", [])}
+    saved = {i: a.lower() for i, a in topo.get("node_address", {}).items()}
+    if len(live) != topo.get("cluster_size"):
+        return f"the running cluster has {len(live)} nodes, the saved {topo.get('mode')} topology {topo.get('cluster_size')}"
+    wrong = sorted(i for i, a in saved.items() if live.get(i) != a)
+    if wrong:
+        return f"node address(es) {', '.join('node-' + i for i in wrong)} differ from the saved topology (a later cluster)"
+    return ""
+
+
 def _live(ch):
     return str(ch.get("status", "")).lower() != "closed"
 

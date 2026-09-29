@@ -67,7 +67,6 @@ def open_exit_channels(cluster, topo, amount, timeout):
 
 
 def up(args):
-    cfg = Config()
     lay = relaytopo.layout(args.mode, args.n)
     env = dict(os.environ)
     env.update(CLUSTER_SIZE=str(lay["cluster_size"]), CLUSTER_CHANNEL_MANAGEMENT="none", EXTRA_IDENTITIES=str(lay["n"]),

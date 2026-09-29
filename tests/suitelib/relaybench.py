@@ -102,6 +102,9 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
     if topo is None or topo.get("mode") != mode:
         have = f"a '{topo.get('mode')}' topology" if topo else "no relay topology"
         checks.skip(f"needs the '{mode}' relay topology (just relay-topology {mode} N); CONFIG_DIR holds {have}")
+    stale = relaytopo.stale_reason(topo, cluster.status())
+    if stale:
+        checks.skip(f"the saved '{mode}' topology is not the running stack ({stale}); just relay-topology {mode} N")
     rungs = k.numbers("LADDER", lo=1, ints=True)
     too_big = [n for n in rungs if n > topo["n"]]
     if too_big:

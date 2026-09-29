@@ -90,3 +90,22 @@ def test_closed_channels_do_not_count():
     topo = relaytopo.with_addresses(relaytopo.layout("paired", 1), status(2, 1))
     chs = exact(topo) + [ch(topo["clients"][0]["address"], addr(7), "Closed")]
     assert relaytopo.check_channels(topo, chs)[0] == []
+
+
+def running(st):
+    return dict(st, state="running")
+
+
+def test_stale_reason_matches_the_live_cluster():
+    st = running(status(4, 2))
+    topo = relaytopo.with_addresses(relaytopo.layout("paired", 2), st)
+    assert relaytopo.stale_reason(topo, st) == ""
+
+
+def test_stale_reason_names_a_later_cluster_or_none():
+    topo = relaytopo.with_addresses(relaytopo.layout("shared", 3), running(status(4, 3)))
+    later = running(status(4, 3))
+    later["nodes"][2]["address"] = addr(55)
+    assert "node-2" in relaytopo.stale_reason(topo, later)
+    assert "3 nodes" in relaytopo.stale_reason(topo, running(status(3, 3)))      # the standard stack after `just up-nobuild`
+    assert relaytopo.stale_reason(topo, None) == "no running localcluster"
