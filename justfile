@@ -435,6 +435,10 @@ relay-topology-check:
 multihost-check hosts:
     python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" check
 
+# Copy what the machines in HOSTS are missing from this one: binaries (checked by sha256), docker images, the repo
+multihost-provision hosts:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" provision
+
 # Take the multi-machine stack down and bring up `paired N`, `shared N` (T33/T34) or `standard N` (T22) across HOSTS
 multihost-up hosts mode n *args:
     python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" up "{{mode}}" "{{n}}" {{args}}

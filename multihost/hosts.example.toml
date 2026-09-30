@@ -29,3 +29,13 @@ server_image = "gnosis_vpn-server:0.7.0-upstream"
 
 [roles.clients]            # the client containers, their tools sidecars and the suite; always the machine running this
 ssh = "local"
+
+# One machine per node or per client: a list per role instead of ssh/addr (multihost/do_fleet.py writes this form).
+# The nodes of a role are spread over its machines (one localcluster each); client k runs on machine (k-1) % len.
+#   [roles.relays]
+#   hoprd_bin = "..."
+#   localcluster_bin = "..."
+#   machines = [
+#     { ssh = "root@10.0.0.21", addr = "10.0.0.21", name = "relay-1" },
+#     { ssh = "root@10.0.0.22", addr = "10.0.0.22", name = "relay-2" },
+#   ]

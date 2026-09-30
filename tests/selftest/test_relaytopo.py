@@ -1,4 +1,5 @@
 """Offline checks for the relay-scaling topologies (suitelib/relaytopo.py): layout, per-client config, channel check."""
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -131,27 +132,47 @@ def test_parse_cpu_sample():
 def test_cpu_groups_single_and_multi_machine():
     from suitelib.config import Config
     from suitelib.relaybench import cpu_groups, cpu_text
-    topo = relaytopo.layout("paired", 1)
-    single = {"nodes": [{"id": 0, "pid": 10}, {"id": 1, "pid": 11}]}
+    topo = relaytopo.layout("paired", 2)
+    single = {"nodes": [{"id": i, "pid": 10 + i} for i in range(4)]}
     g = cpu_groups(Config({}), topo, single)
-    assert list(g) == ["host"] and g["host"][1] == {"node-0": 10, "node-1": 11}
-    multi = {"nodes": [{"id": 0, "pid": 10, "ssh": "root@r"}, {"id": 1, "pid": 11, "ssh": "root@e"}]}
+    assert list(g) == ["local"] and g["local"][1] == "host" and g["local"][2] == {"node-0": 10, "node-1": 11, "node-2": 12, "node-3": 13}
+    multi = {"multihost": True, "nodes": [{"id": 0, "pid": 10, "ssh": "root@r1"}, {"id": 1, "pid": 11, "ssh": "root@r2"},
+                                          {"id": 2, "pid": 12, "ssh": "root@e1"}, {"id": 3, "pid": 13, "ssh": "root@e1"}],
+             "clients": {"gnosis_vpn-client": {"ssh": "root@c1"}, "gnosis_vpn-client-2": {"ssh": "root@c2"}}}
     g = cpu_groups(Config({}), topo, multi)
-    assert sorted(g) == ["clients", "exits", "relays"]
-    assert g["relays"][1] == {"node-0": 10} and g["clients"][1] == {}
+    assert {k: v[1] for k, v in g.items()} == {"root@r1": "relays", "root@r2": "relays", "root@e1": "exits", "root@c1": "clients", "root@c2": "clients"}
+    assert g["root@e1"][2] == {"node-2": 12, "node-3": 13} and not g["root@c1"][0].local
+    shared = {"multihost": True, "nodes": [{"id": i, "pid": i, "ssh": "root@x"} for i in range(4)], "clients": {"gnosis_vpn-client": {"ssh": None}}}
+    g = cpu_groups(Config({}), topo, shared)
+    assert {k: v[1] for k, v in g.items()} == {"root@x": "exits+relays", "local": "clients"}
     assert cpu_text({"host": 93.1}) == "93.1 %"
-    assert cpu_text({"clients": 40.0, "relays": 97.2}) == "clients 40.0 % / relays 97.2 %"
+    assert cpu_text({"relays": 97.2, "clients": 40.0}) == "clients 40.0 % / relays 97.2 %"
+    assert cpu_text({"relays": 60.1}, {"relays": 71.0}) == "relays 60.1 % (max 71.0)"
 
 
-def test_multihost_merge_gives_global_ids_and_remote_urls():
+def test_multihost_merge_spread_and_client_docker(tmp_path):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import multihost
+    from suitelib.client import client_docker_host
+    from suitelib.config import Config
     from suitelib.hosts import Host
-    roles = {r: {"host": Host(None), "ssh": f"root@{r}", "addr": f"10.0.0.{i}"} for i, r in enumerate(multihost.ROLES)}
-    st_r = {"nodes": [{"id": 0, "address": addr(1), "api_url": "http://10.0.0.1:3000"}, {"id": 1, "address": addr(2), "api_url": "http://10.0.0.1:3001"}],
-            "extras": [{"id": 0}]}
-    st_e = {"nodes": [{"id": 0, "address": addr(3), "api_url": "http://127.0.0.1:3100/"}]}
-    m = multihost.merge(roles, "-i k", st_r, st_e, 2)
-    assert [(n["id"], n["role"], n["cluster_id"], n["api_url"]) for n in m["nodes"]] == [
-        (0, "relays", 0, "http://10.0.0.1:3000"), (1, "relays", 1, "http://10.0.0.1:3001"), (2, "exits", 0, "http://10.0.0.2:3100")]
-    assert m["blokli_url"] == "http://10.0.0.0:8080" and m["extras"] == [{"id": 0}]
+    assert [k for _, k in multihost.spread(5, ["a", "b"])] == [3, 2]
+    assert [m for m, _ in multihost.spread(1, ["a", "b", "c"])] == ["a"]
+    roles = {"chain": {"machines": [{"name": "control", "ssh": None, "addr": "10.0.0.1", "host": Host(None)}]}}
+    r1 = {"name": "relay-1", "ssh": "root@10.0.0.2", "addr": "10.0.0.2"}
+    e1 = {"name": "exit-1", "ssh": "root@10.0.0.3", "addr": "10.0.0.3"}
+    for r in ("relays", "exits", "clients"):
+        roles[r] = {"machines": []}
+    started = [("relays", r1, {"nodes": [{"id": 0, "address": addr(1), "api_url": "http://10.0.0.2:3000"}], "extras": [{"id": 0}]}),
+               ("exits", e1, {"nodes": [{"id": 0, "address": addr(3), "api_url": "http://10.0.0.3:3100/"}]})]
+    m = multihost.merge(roles, "-i k", started)
+    assert [(n["id"], n["role"], n["machine"], n["api_url"]) for n in m["nodes"]] == [
+        (0, "relays", "relay-1", "http://10.0.0.2:3000"), (1, "exits", "exit-1", "http://10.0.0.3:3100")]
+    assert m["blokli_url"] == "http://10.0.0.1:8080" and m["extras_ssh"] == "root@10.0.0.2"
+    m["clients"] = {"gnosis_vpn-client": {"ssh": "root@10.0.0.9"}, "gnosis_vpn-client-2": {"ssh": None}}
+    f = tmp_path / "mh.json"
+    f.write_text(json.dumps(m))
+    cfg = Config({"MULTIHOST_STATUS": str(f)})
+    assert client_docker_host(cfg, "gnosis_vpn-client") == "ssh://root@10.0.0.9"
+    assert client_docker_host(cfg, "gnosis_vpn-client-2") == ""
+    assert client_docker_host(Config({}), "gnosis_vpn-client") == ""

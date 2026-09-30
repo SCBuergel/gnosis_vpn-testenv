@@ -37,33 +37,37 @@ def timeout(knobs, connect_timeout=240):
 
 
 def cpu_groups(cfg, topo, status):
-    """Where to sample CPU: {label: (Host, {node name: pid})}. One local group ("host") on a single-machine stack; on a
-    multi-machine stack (status nodes carry "ssh") one group per machine, labelled by the roles it plays, plus the
-    clients' machine (this one)."""
+    """Where to sample CPU: {machine: (Host, role label, {node name: pid})}. One local machine labelled "host" on a
+    single-machine stack; on a multi-machine stack (status nodes carry "ssh") every machine that runs a relay, an exit
+    or a client, labelled by the roles it plays ("relays", "exits", "clients", or "exits+relays" when shared)."""
     node = {nd["id"]: nd for nd in status.get("nodes", [])}
     opts = cfg.env.get("MULTIHOST_SSH_OPTS", "")
-    groups, roles = {}, {}
+    pids, roles = {}, {}
     for role, ids in (("relays", topo["relays"]), ("exits", topo["exits"])):
         for i in ids:
             nd = node.get(i, {})
             key = nd.get("ssh") or "local"
-            groups.setdefault(key, {})[f"node-{i}"] = nd.get("pid")
+            pids.setdefault(key, {})[f"node-{i}"] = nd.get("pid")
             roles.setdefault(key, set()).add(role)
-    if all(key == "local" for key in groups):
-        return {"host": (Host(None), groups.get("local", {}))}
-    roles.setdefault("local", set()).add("clients")
-    groups.setdefault("local", {})
-    return {"+".join(sorted(roles[key])): (Host(key, opts), pids) for key, pids in groups.items()}
+    if all(key == "local" for key in pids) and not status.get("multihost"):
+        return {"local": (Host(None), "host", pids.get("local", {}))}
+    for c in (status.get("clients") or {"local-clients": {"ssh": None}}).values():
+        key = c.get("ssh") or "local"
+        pids.setdefault(key, {})
+        roles.setdefault(key, set()).add("clients")
+    return {key: (Host(None if key == "local" else key, opts), "+".join(sorted(roles[key])), pids[key]) for key in pids}
 
 
 class CpuWindow:
-    """Busy % of each machine (100 = every core busy) and each node's hoprd CPU (% of one core) over a phase."""
+    """Busy % of every machine (100 = all its cores busy), summarised per role label as the mean over the role's
+    machines (host_pct) and the busiest one (host_max), and each node's hoprd CPU (% of one core), over a phase."""
 
     def __init__(self, groups):
         self.groups = groups
 
     def _sample(self):
-        return {label: host.cpu_sample(pids.values()) for label, (host, pids) in self.groups.items()}
+        with ThreadPoolExecutor(max(len(self.groups), 1)) as ex:
+            return dict(zip(self.groups, ex.map(lambda g: g[0].cpu_sample(g[2].values()), self.groups.values())))
 
     def __enter__(self):
         self.t0 = time.time()
@@ -73,14 +77,18 @@ class CpuWindow:
     def __exit__(self, *exc):
         dt = max(time.time() - self.t0, 1e-6)
         s1 = self._sample()
-        self.host_pct, self.node_pct = {}, {}
-        for label, (host, pids) in self.groups.items():
-            (b0, t0, p0), (b1, t1, p1) = self.s0[label], s1[label]
-            ok = None not in (b0, t0, b1, t1) and t1 > t0
-            self.host_pct[label] = round(100 * (b1 - b0) / (t1 - t0), 1) if ok else None
+        per_label, self.node_pct, self.machine_pct = {}, {}, {}
+        for key, (host, label, pids) in self.groups.items():
+            (b0, t0, p0), (b1, t1, p1) = self.s0[key], s1[key]
+            pct = round(100 * (b1 - b0) / (t1 - t0), 1) if None not in (b0, t0, b1, t1) and t1 > t0 else None
+            self.machine_pct[key] = pct
+            if pct is not None:
+                per_label.setdefault(label, []).append(pct)
             for name, pid in pids.items():
                 a, b = p0.get(pid), p1.get(pid)
                 self.node_pct[name] = round(100 * (b - a) / dt, 1) if a is not None and b is not None else None
+        self.host_pct = {k: round(sum(v) / len(v), 1) for k, v in per_label.items()}
+        self.host_max = {k: max(v) for k, v in per_label.items() if len(v) > 1}
         return False
 
 
@@ -209,6 +217,8 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
             "up_agg_mbit": _mbit(sum(u["bytes"] for u in up), up_wall) if up else None,
             "up_wall_s": up_wall or None,
             "host_cpu_down_pct": down_cpu.host_pct, "host_cpu_up_pct": up_cpu.host_pct if up_cpu else None,
+            "host_cpu_down_max": down_cpu.host_max, "host_cpu_up_max": up_cpu.host_max if up_cpu else None,
+            "machine_cpu_down_pct": down_cpu.machine_pct,
             "relay_cpu_down_pct": {f"node-{r}": down_cpu.node_pct.get(f"node-{r}") for r in mine},
             "relay_cpu_up_pct": {f"node-{r}": up_cpu.node_pct.get(f"node-{r}") for r in mine} if up_cpu else None,
             "exit_cpu_down_pct": {f"node-{c['exit']}": down_cpu.node_pct.get(f"node-{c['exit']}") for c in group_t},
@@ -245,20 +255,23 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
                 checks.record(f"n={n}: one relay in the topology, share of relayed packets not scored ({on_mine} forwarded)")
         checks.record(f"n={n}: down {rung['down_avg_mbit']} Mbit/s per client (min {rung['down_min_mbit']}), "
                       f"aggregate {rung['down_agg_mbit']}; up {rung['up_avg_mbit']} per client, aggregate {rung['up_agg_mbit']}; "
-                      f"machine CPU {cpu_text(rung['host_cpu_down_pct'])} down / {cpu_text(rung['host_cpu_up_pct'])} up, "
+                      f"machine CPU {cpu_text(rung['host_cpu_down_pct'], rung['host_cpu_down_max'])} down / "
+                      f"{cpu_text(rung['host_cpu_up_pct'], rung['host_cpu_up_max'])} up, "
                       f"relay CPU (one core = 100) {rung['relay_cpu_down_pct']}")
     if table:
         write_table(run, checks.test, mode, topo, k, table)
     return table
 
 
-def cpu_text(d):
-    """{"host": 93.1} -> "93.1 %"; {"clients": 40.0, "relays": 97.2} -> "clients 40.0 % / relays 97.2 %"."""
+def cpu_text(d, mx=None):
+    """{"host": 93.1} -> "93.1 %"; {"clients": 40.0, "relays": 97.2} -> "clients 40.0 % / relays 97.2 %"; with the
+    per-role maximum over several machines: "relays 60.1 % (max 71.0)"."""
     if not d:
         return "n/a"
     if list(d) == ["host"]:
         return f"{d['host']} %"
-    return " / ".join(f"{k} {v} %" for k, v in d.items())
+    mx = mx or {}
+    return " / ".join(f"{k} {v} %" + (f" (max {mx[k]})" if k in mx else "") for k, v in sorted(d.items()))
 
 
 def write_table(run, test, mode, topo, k, table):
@@ -272,6 +285,7 @@ def write_table(run, test, mode, topo, k, table):
              head, "|" + " --- |" * 9]
     for r in table:
         lines.append(f"| {r['n']} | {r['down_avg_mbit']} ({r['down_min_mbit']}) | {r['down_agg_mbit']} | {r['up_avg_mbit']} ({r['up_min_mbit']}) "
-                     f"| {r['up_agg_mbit']} | {cpu_text(r['host_cpu_down_pct'])} | {cpu_text(r['host_cpu_up_pct'])} "
+                     f"| {r['up_agg_mbit']} | {cpu_text(r['host_cpu_down_pct'], r.get('host_cpu_down_max'))} "
+                     f"| {cpu_text(r['host_cpu_up_pct'], r.get('host_cpu_up_max'))} "
                      f"| {', '.join(f'{a} {b}' for a, b in r['relay_cpu_down_pct'].items())} | {r['reconnects']} ({r['ping_timeouts']}) |")
     (run / f"{test}.md").write_text("\n".join(lines) + "\n")

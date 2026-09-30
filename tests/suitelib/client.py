@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import os
 import re
+import shlex
 import signal
 import subprocess
 import time
@@ -99,6 +100,24 @@ def sidecar_mount_issues(mounts, tests_dir, out_dir):
     return issues
 
 
+_multihost_clients = {}
+
+
+def client_docker_host(cfg, name):
+    """"ssh://root@<addr>" for a client that runs on another machine of a multi-machine stack, "" for a local one."""
+    path = getattr(cfg, "multihost_status", "")
+    if not path:
+        return ""
+    if path not in _multihost_clients:
+        try:
+            with open(path) as fh:
+                _multihost_clients[path] = json.load(fh).get("clients", {})
+        except (OSError, ValueError):
+            _multihost_clients[path] = {}
+    ssh = (_multihost_clients[path].get(name) or {}).get("ssh")
+    return f"ssh://{ssh}" if ssh else ""
+
+
 class Session:
     """A connected tunnel: connect_ms, since (a docker --since stamp taken before the connect), iface.
     Leaving the `with` block disconnects."""
@@ -135,6 +154,10 @@ class Client:
         self._deadman = None
         self.iface = None
         self.session = None
+        # the docker that runs this client: this machine's, or on a multi-machine stack (MULTIHOST_STATUS) the client's
+        # machine's over ssh (tests/multihost.py writes the ssh config docker needs for it)
+        self.docker_host = client_docker_host(cfg, self.name)
+        self.docker = ["docker", "-H", self.docker_host] if self.docker_host else ["docker"]
         _all_clients.append(self)
 
     def __repr__(self):
@@ -142,14 +165,14 @@ class Client:
 
     # -- containers ------------------------------------------------------------------------------------------
     def exists(self):
-        return shell.ok(["docker", "container", "inspect", self.name], timeout=30)
+        return shell.ok([*self.docker, "container", "inspect", self.name], timeout=30)
 
     def tools_exists(self):
-        return shell.ok(["docker", "container", "inspect", self.tools], timeout=30)
+        return shell.ok([*self.docker, "container", "inspect", self.tools], timeout=30)
 
     def tools_mounts(self):
         """{destination: source} of the sidecar's bind mounts, or None when it cannot be inspected."""
-        raw = shell.out(["docker", "container", "inspect", "--format", "{{json .Mounts}}", self.tools], timeout=30, default="")
+        raw = shell.out([*self.docker, "container", "inspect", "--format", "{{json .Mounts}}", self.tools], timeout=30, default="")
         try:
             return {m["Destination"]: m["Source"] for m in json.loads(raw)}
         except (ValueError, TypeError, KeyError):
@@ -169,11 +192,11 @@ class Client:
 
     def exec(self, cmd, timeout=shell.DEFAULT_TIMEOUT):
         """Run a shell command in the client's network namespace (the tools sidecar)."""
-        return shell.run(["docker", "exec", self._shell_target(), "sh", "-c", cmd], timeout=timeout)
+        return shell.run([*self.docker, "exec", self._shell_target(), "sh", "-c", cmd], timeout=timeout)
 
     def exec_client(self, cmd, timeout=shell.DEFAULT_TIMEOUT):
         """Run a shell command inside the client container itself (its binaries, its process namespace)."""
-        return shell.run(["docker", "exec", self.name, "sh", "-c", cmd], timeout=timeout)
+        return shell.run([*self.docker, "exec", self.name, "sh", "-c", cmd], timeout=timeout)
 
     def out(self, cmd, timeout=shell.DEFAULT_TIMEOUT, default=""):
         r = self.exec(cmd, timeout=timeout)
@@ -185,14 +208,14 @@ class Client:
 
     def exec_bg(self, cmd):
         """Start a shell command in the client's network namespace, detached."""
-        return shell.run(["docker", "exec", "-d", self._shell_target(), "sh", "-c", cmd], timeout=60)
+        return shell.run([*self.docker, "exec", "-d", self._shell_target(), "sh", "-c", cmd], timeout=60)
 
     def ctl(self, *args, timeout=60):
-        r = shell.run(["docker", "exec", self.name, "gnosis_vpn-ctl", *args], timeout=timeout)
+        r = shell.run([*self.docker, "exec", self.name, "gnosis_vpn-ctl", *args], timeout=timeout)
         return r.stdout if r.returncode == 0 else ""
 
     def ctl_json(self, *args, timeout=60):
-        raw = shell.run(["docker", "exec", self.name, "gnosis_vpn-ctl", "-o", "json", *args], timeout=timeout).stdout
+        raw = shell.run([*self.docker, "exec", self.name, "gnosis_vpn-ctl", "-o", "json", *args], timeout=timeout).stdout
         try:
             return json.loads(raw)
         except ValueError:
@@ -272,7 +295,7 @@ class Client:
 
     def arm_deadman(self):
         self.disarm_deadman()
-        cmd = f"sleep {self.deadman_s} && docker exec {self.name} gnosis_vpn-ctl disconnect >/dev/null 2>&1"
+        cmd = f"sleep {self.deadman_s} && {shlex.join(self.docker)} exec {self.name} gnosis_vpn-ctl disconnect >/dev/null 2>&1"
         self._deadman = shell.detached(cmd)
         (self.run / f".deadman-{self.name}.pid").write_text(str(self._deadman.pid))
 
@@ -363,14 +386,14 @@ class Client:
                         f.write(cf.read())
                 except OSError:
                     pass
-                f.write("\n== log (last 12 min)\n" + shell.run(["docker", "logs", "--since", "12m", self.name], timeout=120).stdout)
+                f.write("\n== log (last 12 min)\n" + shell.run([*self.docker, "logs", "--since", "12m", self.name], timeout=120).stdout)
             log(f"warning: {self.cfg.dest} not Ready {t}s after client restart (evidence: logs/restart-not-ready-{ts}.log)")
         return True
 
     # -- logs and telemetry ----------------------------------------------------------------------------------
     def log_lines(self, since):
         """Iterate the container log since a docker --since stamp (streamed: the debug log is large)."""
-        p = subprocess.Popen(["timeout", "600", "docker", "logs", "--since", since, self.name], stdout=subprocess.PIPE,
+        p = subprocess.Popen(["timeout", "600", *self.docker, "logs", "--since", since, self.name], stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, errors="replace")
         try:
             for line in p.stdout:
@@ -409,7 +432,7 @@ class Client:
         return int(v) if v.isdigit() else 0
 
     def log_path_size(self):
-        p = shell.out(["docker", "inspect", "-f", "{{.LogPath}}", self.name], timeout=30)
+        p = shell.out([*self.docker, "inspect", "-f", "{{.LogPath}}", self.name], timeout=30)
         try:
             return os.stat(p).st_size
         except OSError:

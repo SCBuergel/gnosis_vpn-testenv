@@ -18,3 +18,7 @@ e2e/results/
 docker/target/uv.lock
 docker/target/.venv/
 __pycache__/
+
+# DigitalOcean API tokens (multihost/do_fleet.py reads ~/DO_API_KEY; never keep one in the repository)
+DO_API_KEY*
+*.do-token
