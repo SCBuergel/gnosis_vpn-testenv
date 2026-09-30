@@ -104,16 +104,22 @@ def create(a):
     if fleet_droplets(a.name):
         raise SystemExit(f"a fleet '{a.name}' already exists; destroy it or pick another --name")
     pub = Path(a.pubkey).expanduser().read_text().strip()
-    names = [f"{prefix(a.name)}control"] + [f"{prefix(a.name)}{role}-{i}" for role, n in
-                                             (("client", a.clients), ("relay", a.relays), ("exit", a.exits)) for i in range(1, n + 1)]
-    ids = []
-    for i in range(0, len(names), 10):                      # the API takes at most 10 names per request
-        body = {"names": names[i:i + 10], "region": a.region, "size": a.size, "image": a.image, "ipv6": False,
-                "monitoring": False, "user_data": USER_DATA.format(pubkey=pub)}
-        ids += [d["id"] for d in api("POST", "/droplets", body)["droplets"]]
+    groups = [(["control"], a.size)] + [([f"{role}-{i}" for i in range(1, n + 1)], a.size)
+                                        for role, n in (("client", a.clients), ("relay", a.relays), ("exit", a.exits)) if n]
+    for spec in a.add or []:                                # extra groups with their own size: "relay16:c-16:1"
+        group, size, count = spec.split(":")
+        groups.append(([f"{group}-{i}" for i in range(1, int(count) + 1)], size))
+    names, ids = [], []
+    for members, size in groups:
+        full = [prefix(a.name) + m for m in members]
+        names += full
+        for i in range(0, len(full), 10):                   # the API takes at most 10 names per request
+            body = {"names": full[i:i + 10], "region": a.region, "size": size, "image": a.image, "ipv6": False,
+                    "monitoring": False, "user_data": USER_DATA.format(pubkey=pub)}
+            ids += [d["id"] for d in api("POST", "/droplets", body)["droplets"]]
     state_file(a.name).write_text(json.dumps({"name": a.name, "ids": ids, "region": a.region, "size": a.size,
                                               "created": time.strftime("%FT%TZ", time.gmtime())}, indent=2))
-    print(f"created {len(ids)} droplets ({a.size}, {a.region}): {', '.join(names)}")
+    print(f"created {len(ids)} droplets in {a.region}: " + "; ".join(f"{len(m)} x {s}: {', '.join(m)}" for m, s in groups))
 
 
 def wait(a):
@@ -153,11 +159,12 @@ def hosts(a):
     ctl_pub, ctl = addrs(ds["control"])
 
     def machines(role):
-        ms = sorted((k for k in ds if k.startswith(role + "-")), key=lambda k: int(k.rsplit("-", 1)[1]))
+        group = {"relay": a.relays, "exit": a.exits, "client": a.clients}[role]
+        ms = sorted((k for k in ds if k.startswith(group + "-") and k[len(group) + 1:].isdigit()), key=lambda k: int(k.rsplit("-", 1)[1]))
         return "\n".join(f'  {{ ssh = "root@{addrs(ds[k])[1]}", addr = "{addrs(ds[k])[1]}", name = "{k}", public = "{addrs(ds[k])[0]}" }},'
                          for k in ms)
 
-    print(f"""# fleet '{a.name}' ({ds['control']['size_slug']}, {ds['control']['region']['slug']}); control {ctl_pub} / {ctl}
+    print(f"""# fleet '{a.name}' in {ds['control']['region']['slug']}: relays = group '{a.relays}', exits = '{a.exits}', clients = '{a.clients}'; control {ctl_pub} / {ctl}
 [ssh]
 options = "-i /root/.ssh/fleet_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/fleet_known_hosts"
 
@@ -232,6 +239,12 @@ def main():
             p.add_argument("--size", default="g-4vcpu-16gb")
             p.add_argument("--image", default="ubuntu-24-04-x64")
             p.add_argument("--pubkey", default="~/.ssh/do_testenv_fleet_ed25519.pub")
+            p.add_argument("--add", action="append", metavar="GROUP:SIZE:COUNT",
+                           help="an extra group of droplets with its own size, e.g. relay16:c-16:1 (gvpn-<name>-relay16-1)")
+        if c == "hosts":
+            p.add_argument("--relays", default="relay", help="the droplet group that plays the relays (relay, relay16, ...)")
+            p.add_argument("--exits", default="exit", help="the droplet group that plays the exits")
+            p.add_argument("--clients", default="client", help="the droplet group that plays the clients")
         if c == "wait":
             p.add_argument("--key", default="~/.ssh/do_testenv_fleet_ed25519")
             p.add_argument("--timeout", type=int, default=1200)

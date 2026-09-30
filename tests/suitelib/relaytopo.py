@@ -14,6 +14,9 @@ Two layouts on one localcluster started with `--channel-management none`:
 
 - paired N (T33-relay-baseline): relays are nodes 0..N-1, exits N..2N-1; client k uses relay k-1 and exit N+k-1.
 - shared N (T34-single-relay-scaling): node 0 is the only relay, exits are 1..N; client k uses exit k.
+- single-exit N (T22-concurrent-clients with a relay per client): relays are nodes 0..N-1, node N is the only exit;
+  client k uses relay k-1. The exit holds one channel to every relay, so a client's forward path is pinned to its
+  relay but its return paths may come back over any relay: the exit, not the client, picks among its channels.
 
 Client k also has its own VPN server (gnosis_vpn-server-{k-1}, bridge 8000+k-1, WireGuard 51821+k-1), so N exits
 means N hoprd exit nodes with N servers behind them; one traffic target serves all. The layout is written to
@@ -22,7 +25,7 @@ import json
 import string
 from pathlib import Path
 
-MODES = ("paired", "shared")
+MODES = ("paired", "shared", "single-exit")
 TOPOLOGY_FILE = "relay-topology.json"
 
 
@@ -41,11 +44,15 @@ def layout(mode, n):
     if mode == "paired":
         relays, exits = list(range(n)), list(range(n, 2 * n))
         pick_relay = lambda k: relays[k - 1]           # noqa: E731
+    elif mode == "single-exit":
+        relays, exits = list(range(n)), [n] * n
+        pick_relay = lambda k: relays[k - 1]           # noqa: E731
     else:
         relays, exits = [0], list(range(1, n + 1))
         pick_relay = lambda k: 0                       # noqa: E731
     clients = [{"k": k, "name": client_name(k), "extra": k - 1, "relay": pick_relay(k), "exit": exits[k - 1],
                 "server": k - 1, "dest": f"node-{exits[k - 1]}", "config": f"client-{k}.toml"} for k in range(1, n + 1)]
+    exits = sorted(set(exits))
     return {"mode": mode, "n": n, "cluster_size": len(relays) + len(exits), "relays": relays, "exits": exits, "clients": clients}
 
 
@@ -136,22 +143,32 @@ def check_channels(topo, channels, clients=None):
 
     problems, summary = [], {}
     wanted = [c for c in topo["clients"] if clients is None or c["k"] in clients]
-    seen_exits = set()
     for c in wanted:
         relay = c["relay_address"].lower()
-        ends = [(c["name"], c["address"])]
-        if c["exit"] not in seen_exits:
-            ends.append((f"node-{c['exit']} (exit of {c['name']})", c["exit_address"]))
-            seen_exits.add(c["exit"])
-        for who, addr in ends:
-            chs = out_of.get(addr.lower(), [])
-            summary[who] = show(chs)
-            if len(chs) != 1:
-                problems.append(f"{who}: {len(chs)} channels out ({show(chs)}), want exactly one, to node-{c['relay']}")
-            elif str(chs[0].get("destination", "")).lower() != relay:
-                problems.append(f"{who}: its channel goes to {show(chs)}, want node-{c['relay']}")
-            elif str(chs[0].get("status", "")).lower() != "open":
-                problems.append(f"{who}: its channel to node-{c['relay']} is {chs[0].get('status')}, want Open")
+        chs = out_of.get(c["address"].lower(), [])
+        summary[c["name"]] = show(chs)
+        if len(chs) != 1:
+            problems.append(f"{c['name']}: {len(chs)} channels out ({show(chs)}), want exactly one, to node-{c['relay']}")
+        elif str(chs[0].get("destination", "")).lower() != relay:
+            problems.append(f"{c['name']}: its channel goes to {show(chs)}, want node-{c['relay']}")
+        elif str(chs[0].get("status", "")).lower() != "open":
+            problems.append(f"{c['name']}: its channel to node-{c['relay']} is {chs[0].get('status')}, want Open")
+    # an exit holds exactly one channel to the relay of every client that uses it (one relay in paired and shared)
+    for ex in sorted({c["exit"] for c in wanted}):
+        users = [c for c in topo["clients"] if c["exit"] == ex]
+        want = {c["relay_address"].lower(): c["relay"] for c in users}
+        addr = users[0]["exit_address"].lower()
+        who = f"node-{ex} (exit of {', '.join(c['name'] for c in users)})"
+        chs = out_of.get(addr, [])
+        summary[who] = show(chs)
+        dests = [str(x.get("destination", "")).lower() for x in chs]
+        relays_txt = ", ".join(f"node-{r}" for r in sorted(want.values()))
+        if len(chs) != len(want):
+            problems.append(f"{who}: {len(chs)} channels out ({show(chs)}), want {len(want)}: one to each of {relays_txt}")
+        elif set(dests) != set(want):
+            problems.append(f"{who}: its channels go to {show(chs)}, want node-{', node-'.join(str(r) for r in sorted(want.values()))}")
+        elif any(str(x.get("status", "")).lower() != "open" for x in chs):
+            problems.append(f"{who}: {show(chs)}, want Open")
     for r in topo["relays"]:
         addr = topo.get("node_address", {}).get(str(r), "")
         summary[f"node-{r} (relay)"] = show(out_of.get(addr.lower(), []))

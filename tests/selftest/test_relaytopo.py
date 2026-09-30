@@ -184,3 +184,16 @@ def test_multihost_need_reads_only_its_role():
     assert multihost.need("chain", {}) == ([], [multihost.CHAIN_IMAGE], False)
     assert multihost.need("relays", {"hoprd_bin": "/h", "localcluster_bin": "/l"}) == (["/h", "/l"], [], False)
     assert multihost.need("clients", {})[2] is True
+
+
+def test_single_exit_layout_and_channels():
+    lay = relaytopo.layout("single-exit", 3)
+    assert lay["relays"] == [0, 1, 2] and lay["exits"] == [3] and lay["cluster_size"] == 4
+    assert [(c["relay"], c["exit"], c["dest"]) for c in lay["clients"]] == [(0, 3, "node-3"), (1, 3, "node-3"), (2, 3, "node-3")]
+    topo = relaytopo.with_addresses(lay, status(4, 3))
+    ok = [ch(c["address"], c["relay_address"]) for c in topo["clients"]] + [ch(addr(3), addr(r)) for r in (0, 1, 2)]
+    assert relaytopo.check_channels(topo, ok)[0] == []
+    one_short = ok[:-1]
+    assert any("2 channels out" in p and "want 3" in p for p in relaytopo.check_channels(topo, one_short)[0])
+    wrong = ok[:-1] + [ch(addr(3), addr(9))]
+    assert any("want node-0, node-1, node-2" in p for p in relaytopo.check_channels(topo, wrong)[0])

@@ -47,16 +47,17 @@ def full_topology(cluster, node):
 
 
 def open_exit_channels(cluster, topo, amount, timeout):
-    """One channel per exit, to its relay (T34's exits all go to the same relay). Idempotent: an exit whose channel is
-    already Open is left alone, so a re-run after a partial failure does not open a second one."""
-    pending = {c["exit"]: c for c in topo["clients"]}
+    """One channel from every exit to the relay of each client that uses it: one per exit in paired and shared (T34's
+    exits all go to the same relay), one to every relay in single-exit. Idempotent: a channel already Open is left
+    alone, so a re-run after a partial failure does not open a second one."""
+    pending = {(c["exit"], c["relay"]): c for c in topo["clients"]}
     t0 = time.time()
     while pending:
-        for ex, c in list(pending.items()):
+        for (ex, _), c in list(pending.items()):
             outs = [x for x in cluster.open_outgoing(ex) if str(x.get("peerAddress", "")).lower() == c["relay_address"].lower()]
             if outs:
                 say(f"node-{ex} (exit) -> node-{c['relay']} (relay): Open")
-                del pending[ex]
+                del pending[(ex, c["relay"])]
                 continue
             r = cluster.api(ex, "POST", "/api/v4/channels", {"destination": c["relay_address"], "amount": amount}, timeout=120)
             say(f"node-{ex} (exit) -> node-{c['relay']} (relay): open {amount}: {r.strip()[:160]}")

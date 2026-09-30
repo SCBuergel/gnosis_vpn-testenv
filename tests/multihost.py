@@ -60,7 +60,7 @@ CHAIN_IMAGE = "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid
 PORTS = {"relays": (3000, 9000), "exits": (3100, 9100)}
 DATA = {"relays": "/tmp/hopr-mh-relays", "exits": "/tmp/hopr-mh-exits"}
 CHAIN_NAME = "hopr-chain"
-MODES = ("paired", "shared", "standard")
+MODES = ("paired", "shared", "single-exit", "standard")
 REMOTE_CONFIG_DIR = "/tmp/gnosis_vpn-testenv"
 SSH_BLOCK = ("# >>> gnosis_vpn-testenv multihost (written by tests/multihost.py)", "# <<< gnosis_vpn-testenv multihost")
 
