@@ -176,3 +176,11 @@ def test_multihost_merge_spread_and_client_docker(tmp_path):
     assert client_docker_host(cfg, "gnosis_vpn-client") == "ssh://root@10.0.0.9"
     assert client_docker_host(cfg, "gnosis_vpn-client-2") == ""
     assert client_docker_host(Config({}), "gnosis_vpn-client") == ""
+
+
+def test_multihost_need_reads_only_its_role():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import multihost
+    assert multihost.need("chain", {}) == ([], [multihost.CHAIN_IMAGE], False)
+    assert multihost.need("relays", {"hoprd_bin": "/h", "localcluster_bin": "/l"}) == (["/h", "/l"], [], False)
+    assert multihost.need("clients", {})[2] is True

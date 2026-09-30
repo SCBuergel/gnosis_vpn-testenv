@@ -438,11 +438,13 @@ def up(args):
 
 def need(role, r):
     """(binaries, images, repo?) a machine of this role needs."""
-    ci = os.environ.get("CLIENT_IMAGE", "gnosis_vpn-client")
-    return {"chain": ([], [r.get("chain_image", CHAIN_IMAGE)], False),
-            "relays": ([r["hoprd_bin"], r["localcluster_bin"]], [], False),
-            "exits": ([r["hoprd_bin"], r["localcluster_bin"]], [r.get("server_image", "gnosis_vpn-server"), "gnosis_vpn-target"], True),
-            "clients": ([], [ci, "gnosis_vpn-suite-tools"], True)}[role]
+    if role == "chain":
+        return [], [r.get("chain_image", CHAIN_IMAGE)], False
+    if role == "relays":
+        return [r["hoprd_bin"], r["localcluster_bin"]], [], False
+    if role == "exits":
+        return [r["hoprd_bin"], r["localcluster_bin"]], [r.get("server_image", "gnosis_vpn-server"), "gnosis_vpn-target"], True
+    return [], [os.environ.get("CLIENT_IMAGE", "gnosis_vpn-client"), "gnosis_vpn-suite-tools"], True
 
 
 def machine_report(role, r, m):
