@@ -94,6 +94,8 @@ class Config:
         # NO_CLUSTER=1 (--no-cluster) tells the cluster-dependent checks there is no localcluster to ask
         self.target_host = e.get("TARGET_HOST", "")
         self.no_cluster = e.get("NO_CLUSTER", "0") == "1"
+        # multi-machine stack (tests/multihost.py): the merged cluster status; the cluster's nodes run on other machines
+        self.multihost_status = e.get("MULTIHOST_STATUS", "")
         # every test is killed after this many seconds unless its module computes its own TIMEOUT(knobs)
         self.test_timeout = int(e.get("TEST_TIMEOUT") or "7200")
         self.client_image = e.get("CLIENT_IMAGE", "")

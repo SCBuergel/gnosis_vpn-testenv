@@ -256,6 +256,10 @@ gen-config-on-network: gen-config
 client-start: network-create
     @scripts/testenv/client.sh start
 
+# Start one client container: name, state dir, extra identity index, config file name in CONFIG_DIR (relay-topology)
+client-start-one name state_dir index config="client.toml": network-create
+    @scripts/testenv/client.sh start "{{name}}" "{{state_dir}}" "{{index}}" "{{config}}"
+
 # Start a second client container on extra identity 1 (needs EXTRA_IDENTITIES=2 at cluster start)
 client2-start: network-create
     @scripts/testenv/client.sh start gnosis_vpn-client-2 "{{CLIENT_STATE_DIR}}-2" 1
@@ -417,6 +421,39 @@ up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config tar
 
 # Restart only the cluster (new HOPRD_BIN / CLUSTER_ENV / CLUSTER_LATENCY), regenerate config, restart the client
 cluster-restart: client-stop cluster-stop cluster-start cluster-wait gen-config client-start
+
+# Pinning: one channel per client and per exit, to the assigned relay (tests/suitelib/relaytopo.py)
+# Take the stack down, bring up `paired N` (client k -> relay k -> exit k, T33) or `shared N` (N clients -> one relay, T34)
+relay-topology mode n *args:
+    python3 "{{justfile_directory()}}/tests/relay_topology.py" up "{{mode}}" "{{n}}" {{args}}
+
+# Hold the live channel graph against CONFIG_DIR/relay-topology.json (exit 1 on any extra, missing or misrouted channel)
+relay-topology-check:
+    python3 "{{justfile_directory()}}/tests/relay_topology.py" check
+
+# Multi-machine testenv (tests/multihost.py, multihost/hosts.example.toml): what every machine in HOSTS has
+multihost-check hosts:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" check
+
+# Copy what the machines in HOSTS are missing from this one: binaries (checked by sha256), docker images, the repo
+multihost-provision hosts:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" provision
+
+# Take the multi-machine stack down and bring up `paired N`, `shared N` (T33/T34) or `standard N` (T22) across HOSTS
+multihost-up hosts mode n *args:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" up "{{mode}}" "{{n}}" {{args}}
+
+# Stop the multi-machine stack on every machine in HOSTS
+multihost-down hosts:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" down
+
+# Run one test against the multi-machine stack (CONFIG_DIR/multihost.env: merged status, target, destination)
+multihost-test name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(just _suite-env)"
+    . "{{CONFIG_DIR}}/multihost.env"
+    cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression --only "{{name}}" --no-preconditions {{args}}
 
 # Run the suite across version/config cells from a cells file (see tests/matrix.py --help)
 matrix cells *args:

@@ -6,8 +6,9 @@ source "${HERE}/common.sh"
 
 : "${CLIENT_STATE_DIR:?}"
 
-# Start one client container: start [name [state_dir [extra_index]]]. Defaults are the primary client
-# (gnosis_vpn-client, CLIENT_STATE_DIR, extra identity 0). Also starts the client's tools sidecar.
+# Start one client container: start [name [state_dir [extra_index [config]]]]. Defaults are the primary client
+# (gnosis_vpn-client, CLIENT_STATE_DIR, extra identity 0, CONFIG_DIR/client.toml). `config` is a file name in
+# CONFIG_DIR (the relay-scaling topologies give every client its own). Also starts the client's tools sidecar.
 start() {
     : "${CONFIG_DIR:?}"
     : "${CLIENT_LOG_LEVEL:?}"
@@ -20,6 +21,8 @@ start() {
     local name="${1:-gnosis_vpn-client}"
     local state_dir="${2:-${CLIENT_STATE_DIR}}"
     local extra_index="${3:-0}"
+    local config_file="${4:-client.toml}"
+    [ -f "${CONFIG_DIR}/${config_file}" ] || die "Error: no client config ${CONFIG_DIR}/${config_file}"
 
     # a container stopped with --rm is removed asynchronously: only a *running* one counts as "already
     # there", a dying one is waited out (otherwise a restart right after client-stop silently starts nothing)
@@ -71,7 +74,7 @@ start() {
         --sysctl net.ipv4.ping_group_range="0 2147483647" \
         "${sysctl_args[@]}" \
         --env RUST_LOG="${CLIENT_LOG_LEVEL}" \
-        --env GNOSISVPN_CONFIG_PATH=/config/client.toml \
+        --env GNOSISVPN_CONFIG_PATH="/config/${config_file}" \
         --env GNOSISVPN_HOPR_BLOKLI_URL="${blokli_url}" \
         --env GNOSISVPN_HOPR_IDENTITY_FILE=/var/lib/gnosisvpn/identity.id \
         --env GNOSISVPN_HOPR_IDENTITY_PASS="${extra_id_pass}" \
@@ -89,7 +92,7 @@ start() {
         { docker logs "${name}" 2>&1 || true; } >&2
         exit 1
     fi
-    echo "Started ${name} (${CLIENT_IMAGE}, identity extra_id_${extra_index})"
+    echo "Started ${name} (${CLIENT_IMAGE}, identity extra_id_${extra_index}, config ${config_file})"
     tools_start "${name}"
 }
 
@@ -268,5 +271,5 @@ start-on-host) start_on_host ;;
 stop-on-host) stop_on_host ;;
 purge-state) purge_state ;;
 purge-state-interactive) purge_state_interactive ;;
-*) die "usage: client.sh start [name state_dir extra_index]|stop|stop-extra <name> <state_dir>|clients-start|clients-stop|tools-start <name>|start-on-host|stop-on-host|purge-state|purge-state-interactive" ;;
+*) die "usage: client.sh start [name state_dir extra_index [config]]|stop|stop-extra <name> <state_dir>|clients-start|clients-stop|tools-start <name>|start-on-host|stop-on-host|purge-state|purge-state-interactive" ;;
 esac

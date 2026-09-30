@@ -22,9 +22,20 @@ class Cluster:
         """False on a production-network run (--no-cluster) or when the localcluster binary/status is not there."""
         if self.cfg.no_cluster:
             return False
+        if self.cfg.multihost_status:
+            return self.status() is not None
         return Path(self.bin).exists() and self.status() is not None
 
     def status(self):
+        """The localcluster status JSON. On a multi-machine stack (MULTIHOST_STATUS, written by tests/multihost.py) the
+        merged status of every machine's cluster: one `nodes` list with global ids, each node's REST URL on its machine,
+        its `ssh` target and `role`."""
+        if self.cfg.multihost_status:
+            try:
+                with open(self.cfg.multihost_status) as fh:
+                    return json.load(fh)
+            except (OSError, ValueError):
+                return None
         raw = shell.out([self.bin, "status", "--data-dir", str(self.data_dir)], timeout=60)
         try:
             return json.loads(raw)

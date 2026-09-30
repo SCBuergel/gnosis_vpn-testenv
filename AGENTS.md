@@ -77,7 +77,9 @@ behind it. The catalogue is `docs/regression-catalogue.md`, the mechanics
   longer, shorten the ramp (`GNOSISVPN_SURB_RAMP_SECS`,
   `[connection.surb_balancing.ramp]`); never idle longer. Only T07-cold-start's
   cold arm and T15-warmup-knee pass `ramp_wait_opt_out=True`, because measuring
-  the ramp is their job.
+  the ramp is their job; T33-relay-baseline, T34-single-relay-scaling and
+  T35-single-exit-scaling pass it for the requested 10 s idle (`IDLE_S`) and say
+  so.
 - The deadman: every connect arms a detached `sleep DEADMAN && disconnect` (900
   s) so the kill switch can never strand a host. A session that must outlive it
   calls `client.deadman_cover(DUR)` before connect (T23-sustained-soak,
@@ -128,6 +130,13 @@ behind it. The catalogue is `docs/regression-catalogue.md`, the mechanics
   one run). `configs/otelcol.yaml` has a `memory_limiter` and a bounded queue;
   without them the collector reached 14 GB and the OOM killer took a running
   suite. The suite reads `/metrics` directly and never depends on the collector.
+- A multi-machine stack (`tests/multihost.py`, catalogue "Multi-machine
+  testenv") binds the chain and every node port to each machine's `addr`; give
+  it private-network addresses, never public ones, and start the remote
+  localclusters one at a time (they fund from one chain account; a one-node
+  cluster is ready only once it has a peer, so the larger clusters start first).
+  A backgrounded `a && b &` over ssh keeps the session open until its timeout:
+  redirect the background job alone.
 - The sidecar mounts `SUITE_OUT_DIR` when the client starts; a suite run under
   another `SUITE_OUT_DIR` sends every probe report where pytest never looks and
   the test prints None with no error (it18b: a launcher that did not source the
@@ -148,9 +157,22 @@ behind it. The catalogue is `docs/regression-catalogue.md`, the mechanics
 
 - hoprd 4.1.x: branch `release/4.1` of `hoprnet/hoprd` (the 4.x line lives
   there, not in `hoprnet/hoprnet`, which holds the core crates and only
-  `release/4.0`; tag `v4.1.2` is on the 5.0 line and its localcluster writes a
-  config 4.x rejects); 4.0.3: tag `v4.0.3`. Build the localcluster from the same
-  tree as the hoprd binary.
+  `release/4.0`; tags `v4.1.2` and `v4.1.3` are on the 5.0 line (hoprd
+  5.0.0-rc.1) and their localcluster writes a config 4.x rejects: "failed to
+  parse config YAML", then `/startedz` times out); the 4.1.3 release binary is
+  `release/4.1 @ a5887bc` ("Bump to version 4.1.3"), so build its localcluster
+  there; 4.0.3: tag `v4.0.3`. Build the localcluster from the same tree as the
+  hoprd binary.
+- T33-relay-baseline, T34-single-relay-scaling and T35-single-exit-scaling need
+  their own stack (`just relay-topology` or `just multihost-up`) and more than
+  the stock localcluster's five nodes: build it with
+  `patches/hoprd-localcluster-max16.patch`. The first attempt ran into the cap
+  ("size must be between 1 and 5") and the tests SKIPped on no stack.
+- The same patch makes a localcluster's client identities random. Stock, it
+  mints them from five frozen secrets, so two clusters on one chain minted the
+  same five: ten clients shared five identities and every 10-client rung lost
+  its return traffic. `tests/multihost.py` refuses a stack in which two clients
+  share an identity.
 - `HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64` is a no-op from
   `release/4.1 @ 60269a3` (it worked around hoprnet #8246 before); a run with it
   is not a different configuration. The #8425 pool arbiter has no config surface

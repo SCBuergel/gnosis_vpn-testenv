@@ -1,6 +1,7 @@
 # Regression test catalogue
 
-The suite in `tests/` runs 24 tests against a `gnosis_vpn-testenv` stack
+The suite in `tests/` runs 24 tests, plus the relay-scaling gates T33 to T35
+that need a topology of their own, against a `gnosis_vpn-testenv` stack
 (localcluster, exit server, client containers, in-cluster traffic target) and
 keeps 8 runbook entries for investigations. Each test's method, criteria and the
 incident it comes from are in its module docstring
@@ -15,9 +16,10 @@ just suite                    # the one run: T01 … T24 in file order
 just suite --fast             # shorter durations; every sustained arm stays ≥ 90 s
 just suite --very-fast        # 15 s arms, 1-2 MiB transfers: smoke only, cannot see a reconnect cycle
 just suite --only t04,t06     # T01 still runs first unless skipped explicitly
-just suite --group realtime   # one group (preflight, throughput, realtime, resilience, config, attribution, multiclient, endurance)
+just suite --group realtime   # one group (preflight, throughput, realtime, resilience, config, attribution, multiclient, endurance, relayscale)
 just suite --knob T23_DUR=150 # a per-test knob beats --very-fast; also as env T23_DUR=150
 just test t10                 # one test, including runbook entries
+just relay-topology paired 5 && just test t33   # T33 on its own topology (T34: shared, T35: single-exit)
 just suite --client NAME --dest ID --target HOST --no-cluster   # a production exit; cluster-only checks skip
 just suite-selftest           # offline: library, target services, probe contracts
 ```
@@ -68,24 +70,27 @@ evidence. An XFAIL is tagged with the issue it waits on (T04-fixed-throughput's
 fails the run until the tag is removed, so a fix never goes green silently; the
 stall is intermittent, so re-run once before removing the tag.
 
-| Knob                                  | Default    | Used by                                                                                                                    | Reference stack measured                                                                                                                   | Why this value                                                                                       |
-| ------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `DOWN_MIN_MBIT`                       | 7 Mbit/s   | T04-fixed-throughput download median at `FLOOR_MIB`=10, or the largest size in the cycle under it (2 MiB at `--very-fast`) | 10.9 (stdev 0.45 over 10 warm 10 MB sessions, glibc build; 11.8 on the upstream image, 2026-09-24; no larger size is calibrated as a rate) | the 2026-09 relay regression halved throughput; 7 catches a halving and clears ±12 % host noise      |
-| `UP_MIN_MBIT`                         | 7 Mbit/s   | T04-fixed-throughput upload median at `FLOOR_MIB`=10, or the largest size under it                                         | 13.0 (stdev 0.69, glibc build; 13.0 on the upstream image)                                                                                 | a halving lands at 6.5                                                                               |
-| `DOWN_P95_MAX_MS`                     | 1500 ms    | T05-loaded-latency RTT p95 during a saturating download                                                                    | 359, 537, 1076 ms over three runs                                                                                                          | the fleet's bufferbloat finding was 2-4 s; 40 % over the worst healthy reading                       |
-| `UP_P95_MAX_MS`                       | 2500 ms    | T05-loaded-latency RTT p95 during a saturating upload                                                                      | 1124, 1153, 1746 ms                                                                                                                        | a parallel upload on the fleet hit 8.9 s                                                             |
-| `LOSS_MAX`                            | 5 %        | T06-realtime-udp, every arm                                                                                                | 0.02-1.7 %                                                                                                                                 | a call above 5 % loss is audibly broken; the fleet's defect read 54-96 %                             |
-| `STALL_MAX`                           | 5 s        | T06-realtime-udp, every arm                                                                                                | 0-1.04 s                                                                                                                                   | a 5 s gap is a dropped call, not jitter                                                              |
-| `SAMPLE_MIN_PCT`                      | 80 %       | T06-realtime-udp, T23-sustained-soak probe sample guard                                                                    | 100 %                                                                                                                                      | a probe that sent less did not run; its loss figure is meaningless                                   |
-| `CALL_LOSS_MAX`                       | 5 %        | T23-sustained-soak call                                                                                                    | 0.0-0.09 %                                                                                                                                 | same probe and rate as T06's echo arm                                                                |
-| `RECOVER_MAX`                         | 90 s       | T10-forced-reconnect first downstream packet after the peer removal                                                        | 72-83 s                                                                                                                                    | the client needs three liveness-ping cycles (~75 s) to notice a removed peer                         |
-| `MTU940_DOWN_MIN_MBIT`                | 6 Mbit/s   | T13-mtu-sweep download median at MTU 940                                                                                   | 12.3                                                                                                                                       | under T04's floor because 940 B carries about a third more packets per byte                          |
-| `AGG_MIN_MBIT`                        | 8 Mbit/s   | T22-concurrent-clients aggregate at the top rung                                                                           | 16.1 at n=4                                                                                                                                | below one client's rate: fires only on a collapse                                                    |
-| `TOL_PCT`                             | 25 %       | T22-concurrent-clients drop from a lower rung to a higher one                                                              | aggregate rose 10.6 → 13.7 → 16.1                                                                                                          | outside ±12-18 % repeatability, inside a real collapse                                               |
-| `COLD_DECAP_MULT`, `COLD_DECAP_FLOOR` | 2, 5       | T07-cold-start cold-arm decapsulation errors vs the warm arm's                                                             | 0 in both arms                                                                                                                             | a cold session may see a few, not a burst                                                            |
-| `SPLIT_TOL_PCT`, `SPLIT_MIN_PATHS`    | 60 %, 1000 | T08-relay-attribution return-path skew at equal latency                                                                    | 8-72 % skew                                                                                                                                | fails an 80/20 split and beyond; expected to fail on some healthy runs, kept as a signal by decision |
-| `UNSTABLE_PCT`                        | 50 %       | T03-repeatability-baseline flag                                                                                            | 12.1 %                                                                                                                                     | above it the stack cannot repeat its own numbers                                                     |
-| `LOG_MB_MIN_MAX`                      | 200 MB/min | T23-sustained-soak client log growth                                                                                       | 63-70 MB/min at path-planner debug                                                                                                         | the incident was 1.6 GB/min                                                                          |
+| Knob                                  | Default      | Used by                                                                                                                    | Reference stack measured                                                                                                                   | Why this value                                                                                                |
+| ------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `DOWN_MIN_MBIT`                       | 7 Mbit/s     | T04-fixed-throughput download median at `FLOOR_MIB`=10, or the largest size in the cycle under it (2 MiB at `--very-fast`) | 10.9 (stdev 0.45 over 10 warm 10 MB sessions, glibc build; 11.8 on the upstream image, 2026-09-24; no larger size is calibrated as a rate) | the 2026-09 relay regression halved throughput; 7 catches a halving and clears ±12 % host noise               |
+| `UP_MIN_MBIT`                         | 7 Mbit/s     | T04-fixed-throughput upload median at `FLOOR_MIB`=10, or the largest size under it                                         | 13.0 (stdev 0.69, glibc build; 13.0 on the upstream image)                                                                                 | a halving lands at 6.5                                                                                        |
+| `DOWN_P95_MAX_MS`                     | 1500 ms      | T05-loaded-latency RTT p95 during a saturating download                                                                    | 359, 537, 1076 ms over three runs                                                                                                          | the fleet's bufferbloat finding was 2-4 s; 40 % over the worst healthy reading                                |
+| `UP_P95_MAX_MS`                       | 2500 ms      | T05-loaded-latency RTT p95 during a saturating upload                                                                      | 1124, 1153, 1746 ms                                                                                                                        | a parallel upload on the fleet hit 8.9 s                                                                      |
+| `LOSS_MAX`                            | 5 %          | T06-realtime-udp, every arm                                                                                                | 0.02-1.7 %                                                                                                                                 | a call above 5 % loss is audibly broken; the fleet's defect read 54-96 %                                      |
+| `STALL_MAX`                           | 5 s          | T06-realtime-udp, every arm                                                                                                | 0-1.04 s                                                                                                                                   | a 5 s gap is a dropped call, not jitter                                                                       |
+| `SAMPLE_MIN_PCT`                      | 80 %         | T06-realtime-udp, T23-sustained-soak probe sample guard                                                                    | 100 %                                                                                                                                      | a probe that sent less did not run; its loss figure is meaningless                                            |
+| `CALL_LOSS_MAX`                       | 5 %          | T23-sustained-soak call                                                                                                    | 0.0-0.09 %                                                                                                                                 | same probe and rate as T06's echo arm                                                                         |
+| `RECOVER_MAX`                         | 90 s         | T10-forced-reconnect first downstream packet after the peer removal                                                        | 72-83 s                                                                                                                                    | the client needs three liveness-ping cycles (~75 s) to notice a removed peer                                  |
+| `MTU940_DOWN_MIN_MBIT`                | 6 Mbit/s     | T13-mtu-sweep download median at MTU 940                                                                                   | 12.3                                                                                                                                       | under T04's floor because 940 B carries about a third more packets per byte                                   |
+| `AGG_MIN_MBIT`                        | 8 Mbit/s     | T22-concurrent-clients aggregate at the top rung                                                                           | 16.1 at n=4                                                                                                                                | below one client's rate: fires only on a collapse                                                             |
+| `TOL_PCT`                             | 25 %         | T22-concurrent-clients drop from a lower rung to a higher one                                                              | aggregate rose 10.6 → 13.7 → 16.1                                                                                                          | outside ±12-18 % repeatability, inside a real collapse                                                        |
+| `COLD_DECAP_MULT`, `COLD_DECAP_FLOOR` | 2, 5         | T07-cold-start cold-arm decapsulation errors vs the warm arm's                                                             | 0 in both arms                                                                                                                             | a cold session may see a few, not a burst                                                                     |
+| `SPLIT_TOL_PCT`, `SPLIT_MIN_PATHS`    | 60 %, 1000   | T08-relay-attribution return-path skew at equal latency                                                                    | 8-72 % skew                                                                                                                                | fails an 80/20 split and beyond; expected to fail on some healthy runs, kept as a signal by decision          |
+| `UNSTABLE_PCT`                        | 50 %         | T03-repeatability-baseline flag                                                                                            | 12.1 %                                                                                                                                     | above it the stack cannot repeat its own numbers                                                              |
+| `LOG_MB_MIN_MAX`                      | 200 MB/min   | T23-sustained-soak client log growth                                                                                       | 63-70 MB/min at path-planner debug                                                                                                         | the incident was 1.6 GB/min                                                                                   |
+| `CAP` (T33; T34, T35)                 | 180 s; 300 s | every transfer of a rung (25 MB in T33, 100 MB in T34 and T35)                                                             | not calibrated yet (first run 2026-09-29)                                                                                                  | 25 MB in 180 s is 1.1 Mbit/s; a completion bound, not a rate threshold, until the ladder is calibrated        |
+| `ATTRIB_MIN_PCT`                      | 90 %         | T33-relay-baseline: share of forwarded packets on the rung's relays (not scored with one relay)                            | 99.9-100 % (rs2, 2026-09-29)                                                                                                               | the topology leaves no other route; the margin is for probe traffic                                           |
+| `PKT_BYTES_MAX`                       | 1000 B       | T33-relay-baseline, T34-single-relay-scaling: floor of forwarded packets = downloaded bytes / this                         | 2.2-2.4 packets per 1000 B (rs2)                                                                                                           | above a HOPR packet's payload, so it holds on any healthy stack and fails a download that bypassed the relays |
 
 ## The run
 
@@ -299,6 +304,147 @@ Upload-only stream at `RATE`=3 Mbit/s for `DUR`=900 s (240; 25) at each of
 `MTUS`="default 940". PASS iff per MTU loss < 5 %, `reconnects`=0 and the
 client's undecodable counter grew by < 50; a missing server report is an
 UNMEASURED FAIL. Deadman covered.
+
+## Relay scaling
+
+Two gates that measure relays, not the client: each runs on a topology
+`just relay-topology MODE N` builds (it takes the stack down first) and SKIPs on
+any other stack, so in the one run they cost nothing. `tests/relay_topology.py`
+starts a localcluster with `--channel-management none`, one pre-funded identity,
+one VPN server and one config file per client, and pins every path through the
+channel graph: each client's strategy opens exactly one channel, to its relay
+(`[strategy]` `min_open_channels`=`target_open_channels`=1 and a one-peer
+`channel_allowlist`), and each exit gets exactly one channel, to the same relay,
+through its REST API. At one hop that fixes both directions, client → relay →
+exit and the return path exit → relay → client, since the final hop of a path
+needs no channel. `just relay-topology-check` holds the live graph against the
+saved layout. The stock `hoprd-localcluster` caps a cluster at five nodes (its
+five frozen identities); T33-relay-baseline at five clients needs ten, so build
+the localcluster with `patches/hoprd-localcluster-max16.patch` (random
+identities, which the cluster uses, deploy their Safes on chain at start and are
+not bound to the frozen set; up to 16 nodes). The hoprd binary under test is
+unchanged.
+
+The ladder (`suitelib/relaybench.py`), per rung of `LADDER`="1 2 3 4 5" clients:
+hold the chain's channel graph against the topology (anything else FAILs the
+rung before it runs), connect the rung's clients at once, wait `IDLE_S`=10 s
+(below `SURB_RAMP_WAIT` on purpose, by request), download on every client at
+once, wait `PAUSE_S`=10 s, upload on every client at once, disconnect, wait
+`PAUSE_S` before the next rung. Each transfer runs in
+`tests/probes/transferprobe.py` in the client's tools sidecar and logs its
+cumulative bytes with epoch timestamps; all transfers of a phase start at one
+common epoch second (`START_LEAD_S`=5 s after they are handed out, so reaching
+remote clients does not stagger them) and the spread of the actual starts is
+reported as start skew.
+
+**The rates are those of the overlap**: the window from the last transfer's
+first byte to the first transfer's last byte, in which every client was moving
+data. Aggregate = the bytes all clients moved inside it / its length; per client
+= each client's bytes inside it / its length (mean and minimum). With one client
+it is the whole transfer. (Earlier runs reported a "wall-clock aggregate", all
+bytes / time to the last finish, which counts the tail after the first clients
+finished; the overlap does not.)
+
+A rung PASSes iff every transfer completes within `CAP`, and iff the relays
+forwarded at least one packet per `PKT_BYTES_MAX`=1000 downloaded bytes during
+the download (`RELAY_METRIC`=`hopr_packets_count{type="forwarded"}`; a HOPR
+packet carries less, so a download that bypassed the relays fails), and, where
+each return path is pinned to its client's relay and there is more than one
+relay (T33), iff at least `ATTRIB_MIN_PCT`=90 % of all forwarded packets went
+through the rung's own relays. Rates are recorded, not scored, until calibrated.
+Each run records the hoprd version (REST `/node/version` of a relay and of an
+exit), the client version and image, and one line of machine specs per role, and
+leads its report with the node under test: its machine's CPU (% of all cores)
+and its hoprd process's CPU (% of one core), from the common start to the last
+finish; the other roles' machines are recorded too. Each run writes `<TEST>.md`,
+one line per rung.
+
+### T33-relay-baseline · **gate** · relayscale
+
+`just relay-topology paired 5`: client k → relay k → exit k, as many relays and
+exits as clients (`CLUSTER_SIZE`=10). The baseline: on one host every relay
+shares the machine, so this ladder shows what the host allows.
+
+### T34-single-relay-scaling · **gate** · relayscale
+
+`just relay-topology shared 5` (or `just multihost-up HOSTS shared N`): every
+client through one relay to its own exit. `DOWN_BYTES`=`UP_BYTES`=100000000,
+`CAP`=300 s (2.67 Mbit/s). Under test: the relay. The twin of
+T35-single-exit-scaling: same ladder, settings and report (they do not read
+one-to-one, see T35).
+
+### T35-single-exit-scaling · **gate** · relayscale
+
+`just multihost-up HOSTS single-exit N` (or
+`just relay-topology single-exit N`): one exit for every client; client k holds
+one channel, to relay k, and the exit one channel to each relay. So each
+client's forward path (its upload) is pinned to its own relay, but the exit
+spreads every client's return traffic (its download) over all the relays: in the
+2026-09-30 run each of ten relays carried 9-10 % of it at every rung, also with
+one client. T35 therefore measures one exit behind a pool of relays, not a relay
+per client, and does not read one-to-one against T34-single-relay-scaling;
+pinning the return path would need a fresh stack per rung.
+`DOWN_BYTES`=`UP_BYTES`=100000000, `CAP`=300 s. Under test: the exit (its
+machine also runs a VPN server per client and the traffic target); if its
+machine is far from saturated, the top rung is a lower bound on one exit's
+capacity. T22-concurrent-clients keeps its standard stack.
+
+## Multi-machine testenv
+
+`tests/multihost.py` spreads one stack over several machines: the chain (Anvil +
+Blokli), the relays, the exits (with the VPN servers and the traffic target) and
+the clients (their containers and the suite) each on a machine of its own, or
+any of them sharing one. A hosts file names each role's machine (`ssh`), the
+address the others reach it at (`addr`, preferably a private network: the chain,
+the nodes' REST and P2P ports bind to it and nothing else) and its binaries;
+`multihost/hosts.example.toml` is the template. Run it on the clients' machine,
+which needs ssh to the others (a dedicated key).
+
+```sh
+just multihost-check HOSTS                 # every machine: reachable, binaries with checksums, images, repo
+just multihost-up HOSTS paired 5           # T33-relay-baseline's topology; `shared 5` for T34, `standard 5` for T22
+just multihost-test t33                    # the test against it (CONFIG_DIR/multihost.env)
+just multihost-down HOSTS
+```
+
+How it comes up: the chain container starts on its machine; the relays' and the
+exits' machines each run a `hoprd-localcluster` with `--chain-url` at that
+chain, `--p2p-host`/`--api-host` their `addr` and `--channel-management none`,
+one after the other because both fund from the chain's one dev account. Each
+localcluster pre-announces its nodes right after their Safes (the window Blokli
+re-indexes), so every node reaches every other. The relays' cluster also mints
+the clients' identities. The merged status (relays node-0.., exits after them,
+each with its REST URL, `ssh` target and role) is written to
+`CONFIG_DIR/multihost.json` and read by the suite through `MULTIHOST_STATUS`;
+the target is reached through `TARGET_HOST`. `paired` and `shared` build the
+relay-scaling topology as `just relay-topology` does; `standard` is
+T22-concurrent-clients' stack, two relays and one exit in a full mesh with the
+clients on their own strategy. T33 and T34 then report CPU per machine (sampled
+on that machine over ssh) instead of one host figure.
+
+**One machine per node and per client (DigitalOcean).** `multihost/do_fleet.py`
+runs where the API token is (`DO_API_KEY_FILE`, default `~/DO_API_KEY`; it is
+only ever sent to api.digitalocean.com and `.gitignore` keeps `DO_API_KEY*` out
+of the repository). `create --name N --clients 5 --relays 5 --exits 5` makes a
+control droplet (the chain and the suite) plus one droplet per client, relay and
+exit; `wait` returns once every droplet has run its first-boot setup (docker,
+just, WireGuard tools, pytest); `hosts` prints the hosts file for the control
+droplet; `destroy` deletes every droplet of the fleet and checks none is left.
+Then, on the control droplet: `just multihost-provision HOSTS` (binaries, images
+and the repo from the control droplet to every other),
+`just multihost-up HOSTS MODE 5`, `just multihost-test tNN`. Defaults:
+`g-4vcpu-16gb` (dedicated General Purpose, regular Intel) in `lon1`, because
+`fra1` offered no dedicated-CPU size on 2026-09-30. A token without account-key
+scope works: the SSH key goes in through the first-boot script, which also
+unexpires root's password (without an account key DigitalOcean sets an expiring
+one, and sshd then refuses every non-interactive login). Fetch the run
+directories before `destroy`. Every droplet goes into the DigitalOcean project
+`--project` (default "Gnosis VPN test infra"; `assign` moves existing droplets).
+`bake --snapshot NAME --source HOST` builds a snapshot with the tools, the five
+images, the node binaries and the repo (image:create scope needed);
+`create --image <snapshot id>` then gives droplets that are ready about 55 s
+after creation and need no provisioning beyond a repo update. Rebake when a
+version changes; `snapshots` lists them.
 
 ## The runbook
 
