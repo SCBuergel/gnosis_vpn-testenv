@@ -251,6 +251,10 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay
             except ConnectFailed as e:
                 return {"ok": False, "error": str(e)}
 
+        # a rung outlasts the 900 s deadman at large n and CAP: idle, two capped transfers with their lead, the pause,
+        # and reading every client's log before the disconnect
+        for cl in group:
+            cl.deadman_cover(int(k.IDLE_S) + 2 * (int(k.CAP) + int(k.START_LEAD_S)) + int(k.PAUSE_S) + 60 * n)
         conn = _parallel(connect, group_t)
         failed = [f"{c['name']} -> {c['dest']}: {r.get('error')}" for c, r in zip(group_t, conn) if not r["ok"]]
         if failed:
