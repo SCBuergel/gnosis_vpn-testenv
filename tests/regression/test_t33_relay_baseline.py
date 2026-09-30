@@ -29,4 +29,4 @@ def TIMEOUT(knobs):
 
 
 def test_relay_baseline(cfg, run, cluster, target, checks, knobs):
-    relaybench.run_ladder(cfg, run, cluster, target, checks, knobs, "paired")
+    relaybench.run_ladder(cfg, run, cluster, target, checks, knobs, "paired", under_test="relay")

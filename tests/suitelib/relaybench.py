@@ -1,38 +1,48 @@
-"""The ladder T33-relay-baseline and T34-single-relay-scaling share: rungs of n clients (n = 1, 2, ... from LADDER),
-each downloading DOWN_BYTES and then uploading UP_BYTES at the same time, each through its own exit and the relay
-the topology assigns (suitelib/relaytopo.py).
+"""The ladder T33-relay-baseline, T34-single-relay-scaling and T35-single-exit-scaling share: rungs of n clients
+(n = 1, 2, ... from LADDER), each downloading DOWN_BYTES and then uploading UP_BYTES at the same time, each through the
+relay and exit the topology assigns (suitelib/relaytopo.py).
 
-Per rung, in order: hold the chain's channel graph against the topology (every client and every exit exactly one
-Open channel, to its relay; anything else fails the rung before a byte moves), connect the rung's clients in
-parallel, wait IDLE_S, download in parallel, wait PAUSE_S, upload in parallel, disconnect. PAUSE_S also separates
-the rungs. Each transfer runs under curl's CAP; a rung passes iff every transfer of it completes within CAP.
+Per rung, in order: hold the chain's channel graph against the topology (anything else fails the rung before a byte
+moves), connect the rung's clients in parallel, wait IDLE_S, download on every client at once, wait PAUSE_S, upload on
+every client at once, disconnect. PAUSE_S also separates the rungs.
 
-Recorded next to the rates: each machine's CPU (all cores, /proc/stat, read on that machine) and each relay's and exit's
-hoprd CPU over each phase,
-because on one host the machine is the likely ceiling and the baseline is only readable next to it; each relay's
-forwarded-packet count over the download, which shows the traffic crossed the assigned relays: they forwarded at
-least one packet per PKT_BYTES_MAX downloaded bytes (a HOPR packet carries less, so a download that bypassed the relays
-fails it), and, with more than one relay in the topology, ATTRIB_MIN_PCT of all relayed packets were on the rung's own
-relays (with one relay that share is 100 % by construction and is not scored); reconnects next to tunnel-ping timeouts."""
+Every transfer runs in tests/probes/transferprobe.py inside the client's tools sidecar, which logs cumulative bytes
+with epoch timestamps. All transfers of a phase start at one common epoch second (START_LEAD_S after the runner hands
+them out, so the time docker-over-ssh takes to reach each client does not stagger them); the spread of the actual
+starts is reported (start skew). The rates are those of the overlap: the window from the last transfer's first byte to
+the first transfer's last byte, the stretch in which every client was moving data. Aggregate = the bytes all clients
+moved inside the window / its length; per client = each client's bytes inside it / its length (mean and minimum). With
+one client the window is its whole transfer. A rung passes iff every transfer completes within CAP.
+
+Recorded next to the rates: the node under test (the relay in T33/T34, the exit in T35): its machine's CPU (% of all
+its cores) and its hoprd process's CPU (% of one core), over the phase from the common start to the last finish; the
+other roles' machines; the hoprd and client versions and one line of machine specs per role; the relays'
+forwarded-packet count over the download, which shows the traffic crossed the relays: they forwarded at least one
+packet per PKT_BYTES_MAX downloaded bytes (a HOPR packet carries less, so a download that bypassed the relays fails
+it), and, where each client's return path is pinned to its relay (paired, not single-exit) with more than one relay,
+ATTRIB_MIN_PCT of all relayed packets were on the rung's own relays; reconnects next to tunnel-ping timeouts."""
+import json
 import statistics as st
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import relaytopo
+from . import relaytopo, shell
 from .client import Client, ConnectFailed
 from .client import telemetry_sum
 from .hosts import Host
-from .target import curl_down, curl_up
 from .verdicts import log, utc_now
 
-KNOBS = dict(LADDER="1 2 3 4 5", DOWN_BYTES=25000000, UP_BYTES=25000000, CAP=180, IDLE_S=10, PAUSE_S=10,
+KNOBS = dict(LADDER="1 2 3 4 5", DOWN_BYTES=25000000, UP_BYTES=25000000, CAP=180, IDLE_S=10, PAUSE_S=10, START_LEAD_S=5,
              RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90, PKT_BYTES_MAX=1000)
+# T34 and T35 compare one relay and one exit under load: 100 MB each way, 300 s (2.67 Mbit/s) to complete
+SCALING_KNOBS = dict(KNOBS, DOWN_BYTES=100000000, UP_BYTES=100000000, CAP=300)
+PROBE = "/suite/probes/transferprobe.py"
 
 
 def timeout(knobs, connect_timeout=240):
-    """Worst case per rung: connect, idle, both transfers at their cap, pauses, log reading; plus slack."""
+    """Worst case per rung: connect, idle, both transfers at their cap, lead times, pauses, log reading; plus slack."""
     rungs = len(str(knobs.LADDER).split())
-    per = connect_timeout + int(knobs.IDLE_S) + 2 * (int(knobs.CAP) + 30) + 2 * int(knobs.PAUSE_S) + 180
+    per = connect_timeout + int(knobs.IDLE_S) + 2 * (int(knobs.CAP) + int(knobs.START_LEAD_S) + 60) + 2 * int(knobs.PAUSE_S) + 240
     return rungs * per + 300
 
 
@@ -97,26 +107,89 @@ def _parallel(fn, items):
         return list(ex.map(fn, items))
 
 
-def _phase(group, fn, groups):
-    """Run fn(client) for every client at once; returns (results, wall seconds, CpuWindow)."""
-    with CpuWindow(groups) as cpu:
-        t0 = time.time()
-        res = _parallel(fn, group)
-        wall = time.time() - t0
-    return res, round(wall, 2), cpu
+# -- transfers and the overlap ---------------------------------------------------------------------------------------
+def interp(samples, t):
+    """Cumulative bytes at epoch t from a probe's [[epoch, cumulative], ...] log, linear between samples."""
+    if not samples:
+        return 0
+    if t <= samples[0][0]:
+        return samples[0][1] if t == samples[0][0] else 0
+    for (t0, b0), (t1, b1) in zip(samples, samples[1:]):
+        if t0 <= t <= t1:
+            return b0 + (b1 - b0) * ((t - t0) / (t1 - t0) if t1 > t0 else 1)
+    return samples[-1][1]
 
 
-def attribution_floor(nbytes, pkt_bytes_max):
-    """Fewest packets the relays must have forwarded for nbytes to have crossed them: a HOPR packet carries at most
-    pkt_bytes_max bytes of payload, so fewer means some of the download took another route."""
-    return -(-int(nbytes) // int(pkt_bytes_max))
+def overlap(results):
+    """The stretch in which every transfer was moving: [last first byte, first last byte]. Returns the window, its
+    length, every client's Mbit/s inside it, their mean and minimum, the aggregate, and the spread of the starts. A
+    transfer that never moved a byte has no window: then every rate is 0."""
+    starts = [r["start"] for r in results if r.get("start")]
+    skew = round(max(starts) - min(starts), 3) if starts else None
+    moving = [r for r in results if r.get("first") is not None and r.get("last") is not None]
+    base = {"start_skew_s": skew, "slowest_s": round(max((r["last"] - r["start"]) for r in moving), 2) if moving else None}
+    if not results or len(moving) < len(results):
+        return dict(base, window=None, window_s=0, per_client_mbit=[0] * len(results), mean_mbit=0, min_mbit=0, agg_mbit=0)
+    a, b = max(r["first"] for r in moving), min(r["last"] for r in moving)
+    secs = b - a
+    if secs <= 0:
+        return dict(base, window=[a, b], window_s=0, per_client_mbit=[0] * len(results), mean_mbit=0, min_mbit=0, agg_mbit=0)
+    per = [round((interp(r["samples"], b) - interp(r["samples"], a)) * 8 / secs / 1e6, 3) for r in results]
+    return dict(base, window=[round(a, 3), round(b, 3)], window_s=round(secs, 2), per_client_mbit=per,
+                mean_mbit=round(st.mean(per), 3), min_mbit=min(per), agg_mbit=round(sum(per), 3))
 
 
-def _mbit(nbytes, secs):
-    return round(nbytes * 8 / secs / 1e6, 3) if secs and secs > 0 else 0
+def transfer_phase(group, direction, nbytes, k, target_ip, groups, save):
+    """Every client of the rung runs one transfer, all starting at one common epoch second; CPU is sampled from that
+    second to the last finish. Returns (probe results, overlap summary, CpuWindow)."""
+    start_at = time.time() + float(k.START_LEAD_S)
+    cmd = (f"python3 {PROBE} --host {target_ip} --dir {direction} --bytes {int(nbytes)} --start-at {start_at:.3f} "
+           f"--timeout {int(k.CAP)}")
+
+    def one(cl):
+        raw = cl.out(cmd, timeout=int(k.CAP) + int(k.START_LEAD_S) + 120)
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return {"dir": direction, "want": nbytes, "bytes": 0, "complete": False, "samples": [], "start": None,
+                    "first": None, "last": None, "code": None, "error": f"no probe output: {raw[-200:]!r}"}
+
+    with ThreadPoolExecutor(max(len(group), 1)) as ex:
+        futs = [ex.submit(one, cl) for cl in group]
+        wait = start_at - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        with CpuWindow(groups) as cpu:
+            res = [f.result() for f in futs]
+    for cl, r in zip(group, res):
+        save(cl, direction, r)
+    return res, overlap(res), cpu
 
 
-def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
+# -- versions and machines -------------------------------------------------------------------------------------------
+SPEC_CMD = ("echo \"$(nproc) vCPU, $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//'), "
+            "$(free -g | awk '/^Mem/{print $2}') GB RAM, $(curl -s -m 2 http://169.254.169.254/metadata/v1/region || hostname)\"")
+
+
+def stack_info(cluster, topo, client, groups):
+    """hoprd version of a relay and of an exit (REST /node/version), the client's version and image, one line of specs
+    per role (identical machines of a role collapse into "N x ...")."""
+    hoprd = {}
+    for role, ids in (("relay", topo["relays"]), ("exit", topo["exits"])):
+        v = cluster.api_json(ids[0], "GET", "/api/v4/node/version", default={}) or {}
+        hoprd[role] = v.get("version") or "unknown"
+    image = shell.out([*client.docker, "inspect", "-f", "{{.Config.Image}}", client.name], timeout=60) or "unknown"
+    with ThreadPoolExecutor(max(len(groups), 1)) as ex:
+        specs = list(ex.map(lambda g: (g[1], g[0].out(SPEC_CMD, timeout=60) or "unreachable"), groups.values()))
+    by = {}
+    for label, line in specs:
+        by.setdefault(label, []).append(line)
+    machines = {label: "; ".join(f"{lines.count(x)} x {x}" for x in sorted(set(lines))) for label, lines in by.items()}
+    return {"hoprd": hoprd, "client": client.version(), "client_image": image, "machines": machines}
+
+
+def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay"):
+    """under_test: "relay" (T33, T34) or "exit" (T35): whose machine and process CPU the report leads with."""
     k = knobs
     topo = relaytopo.load(cfg.config_dir)
     if topo is None or topo.get("mode") != mode:
@@ -138,11 +211,17 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
         return
     status = cluster.status() or {}
     groups = cpu_groups(cfg, topo, status)
+    info = stack_info(cluster, topo, clients[1], groups)
     checks.row(kind="topology", topology={x: topo.get(x) for x in ("mode", "n", "relays", "exits", "clients", "created", "ready",
-                                                                   "exit_channel_funding", "client_image", "hoprd_bin")},
-               client_version=clients[1].version())
-    log(f"{mode} topology: relays {topo['relays']}, exits {topo['exits']}; rungs {rungs}; "
-        f"{k.DOWN_BYTES} B down, {k.UP_BYTES} B up, cap {k.CAP}s, idle {k.IDLE_S}s, pause {k.PAUSE_S}s")
+                                                                   "exit_channel_funding", "client_image", "hoprd_bin")}, stack=info)
+    checks.record(f"stack: hoprd {info['hoprd']['relay']} (relays) / {info['hoprd']['exit']} (exits); client {info['client']} "
+                  f"(image {info['client_image']}); machines: " + " | ".join(f"{r}: {m}" for r, m in sorted(info["machines"].items())))
+    ut_label = {"relay": "relays", "exit": "exits"}[under_test]
+    if list(info["machines"]) == ["host"]:
+        ut_label = "host"
+    log(f"{mode} topology: relays {topo['relays']}, exits {topo['exits']}; rungs {rungs}; under test: the {under_test}; "
+        f"{k.DOWN_BYTES} B down, {k.UP_BYTES} B up, cap {k.CAP}s, idle {k.IDLE_S}s, pause {k.PAUSE_S}s, start lead {k.START_LEAD_S}s")
+    tag = checks.test.split("-")[0].lower()
 
     def relay_counts():
         return {r: telemetry_sum(cluster.metrics(r), k.RELAY_METRIC) for r in topo["relays"]}
@@ -160,7 +239,7 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
         if problems:
             checks.failed(f"n={n}: channel graph is not the {mode} topology, rung not run: " + "; ".join(problems))
             continue
-        log(f"n={n}: channels ok ({len(tclients)} clients, {len(set(c['exit'] for c in tclients))} exits, one channel each to its relay)")
+        log(f"n={n}: channels ok")
         # (2) connect the rung's clients at once, then the idle
         since = utc_now()
 
@@ -181,86 +260,102 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
             continue
         time.sleep(k.IDLE_S)
         connected = [cl.is_connected() for cl in group]
-        # (3) downloads at once, relay packet counts around them
+
+        def save(cl, direction, r):
+            (run / f"{tag}-n{n}-{direction}-{cl.name}.json").write_text(json.dumps(r))
+
+        # (3) downloads at once, relay packet counts around them; the pause; uploads at once
         before = relay_counts()
-        down, down_wall, down_cpu = _phase(group, lambda cl: curl_down(cl, target.ip, k.DOWN_BYTES, k.CAP), groups)
+        down, dov, down_cpu = transfer_phase(group, "down", k.DOWN_BYTES, k, target.ip, groups, save)
         after = relay_counts()
-        up, up_wall, up_cpu = [], 0, None
+        up, uov, up_cpu = [], None, None
         if k.UP_BYTES > 0:
             time.sleep(k.PAUSE_S)
-            up, up_wall, up_cpu = _phase(group, lambda cl: curl_up(cl, target.ip, k.UP_BYTES, k.CAP), groups)
+            up, uov, up_cpu = transfer_phase(group, "up", k.UP_BYTES, k, target.ip, groups, save)
         errs = [cl.log_errors(since) for cl in group]
         dcmd = [cl.count_log(since, r"received socket command.*command=Disconnect") for cl in group]
         for c, cl in zip(group_t, group):
-            cl.save_log(f"{checks.test.split('-')[0].lower()}-n{n}-c{c['k']}", since)
+            cl.save_log(f"{tag}-n{n}-c{c['k']}", since)
         for cl in group:
             cl.disconnect()
-        # (4) attribution: the relayed packets during the download went through the rung's relays
+        # (4) attribution: the relayed packets during the download went through the relays. In single-exit the exit
+        # picks the return relay among all its channels, so every relay counts and no share is scored.
         delta = {r: (after[r] - before[r]) if after.get(r) is not None and before.get(r) is not None else None for r in topo["relays"]}
-        mine = sorted({c["relay"] for c in group_t})
-        known = [v for v in delta.values() if v is not None]
-        tot = sum(known)
+        mine = sorted(topo["relays"]) if mode == "single-exit" else sorted({c["relay"] for c in group_t})
+        tot = sum(v for v in delta.values() if v is not None)
         on_mine = sum(delta[r] or 0 for r in mine)
         attrib_pct = round(100 * on_mine / tot, 1) if tot > 0 else None
+        ut_nodes = sorted({c["relay"] for c in group_t}) if under_test == "relay" else sorted({c["exit"] for c in group_t})
         # (5) rows and the rung's numbers
-        for c, r, u, e, dc, ok in zip(group_t, down, up or [{}] * n, errs, dcmd, connected):
-            checks.row(n=n, kind="client", client=c["name"], relay=c["relay"], exit=c["exit"], down=r, up=u, connected_before=ok,
-                       errors={x: e[x] for x in ("reconnects", "ping_timeouts", "no_surb", "warn_error_lines")}, disconnect_cmds=dc)
+        strip = lambda r: {x: r.get(x) for x in ("want", "bytes", "complete", "code", "error", "start", "first", "last")}  # noqa: E731
+        for i, (c, r, e, dc, ok) in enumerate(zip(group_t, down, errs, dcmd, connected)):
+            u = up[i] if up else {}
+            checks.row(n=n, kind="client", client=c["name"], relay=c["relay"], exit=c["exit"], down=strip(r), up=strip(u) if u else {},
+                       down_overlap_mbit=dov["per_client_mbit"][i], up_overlap_mbit=uov["per_client_mbit"][i] if uov else None,
+                       connected_before=ok, errors={x: e[x] for x in ("reconnects", "ping_timeouts", "no_surb", "warn_error_lines")},
+                       disconnect_cmds=dc)
         rung = {
             "n": n,
-            "down_avg_mbit": round(st.mean([r["mbit"] for r in down]), 3),
-            "down_min_mbit": min(r["mbit"] for r in down),
-            "down_agg_mbit": _mbit(sum(r["bytes"] for r in down), down_wall),
-            "down_wall_s": down_wall,
-            "up_avg_mbit": round(st.mean([u["mbit"] for u in up]), 3) if up else None,
-            "up_min_mbit": min(u["mbit"] for u in up) if up else None,
-            "up_agg_mbit": _mbit(sum(u["bytes"] for u in up), up_wall) if up else None,
-            "up_wall_s": up_wall or None,
+            "down_avg_mbit": dov["mean_mbit"], "down_min_mbit": dov["min_mbit"], "down_agg_mbit": dov["agg_mbit"],
+            "down_window_s": dov["window_s"], "down_start_skew_s": dov["start_skew_s"], "down_slowest_s": dov["slowest_s"],
+            "up_avg_mbit": uov["mean_mbit"] if uov else None, "up_min_mbit": uov["min_mbit"] if uov else None,
+            "up_agg_mbit": uov["agg_mbit"] if uov else None, "up_window_s": uov["window_s"] if uov else None,
+            "up_start_skew_s": uov["start_skew_s"] if uov else None, "up_slowest_s": uov["slowest_s"] if uov else None,
+            "under_test": under_test, "ut_nodes": [f"node-{i}" for i in ut_nodes],
+            "ut_machine_cpu_down": down_cpu.host_pct.get(ut_label), "ut_machine_cpu_up": up_cpu.host_pct.get(ut_label) if up_cpu else None,
+            "ut_process_cpu_down": {f"node-{i}": down_cpu.node_pct.get(f"node-{i}") for i in ut_nodes},
+            "ut_process_cpu_up": {f"node-{i}": up_cpu.node_pct.get(f"node-{i}") for i in ut_nodes} if up_cpu else None,
             "host_cpu_down_pct": down_cpu.host_pct, "host_cpu_up_pct": up_cpu.host_pct if up_cpu else None,
             "host_cpu_down_max": down_cpu.host_max, "host_cpu_up_max": up_cpu.host_max if up_cpu else None,
             "machine_cpu_down_pct": down_cpu.machine_pct,
-            "relay_cpu_down_pct": {f"node-{r}": down_cpu.node_pct.get(f"node-{r}") for r in mine},
-            "relay_cpu_up_pct": {f"node-{r}": up_cpu.node_pct.get(f"node-{r}") for r in mine} if up_cpu else None,
-            "exit_cpu_down_pct": {f"node-{c['exit']}": down_cpu.node_pct.get(f"node-{c['exit']}") for c in group_t},
-            "relay_packets_down": {f"node-{r}": v for r, v in delta.items()},
-            "attrib_pct": attrib_pct,
+            "relay_cpu_down_pct": {f"node-{r}": down_cpu.node_pct.get(f"node-{r}") for r in sorted({c["relay"] for c in group_t})},
+            "exit_cpu_down_pct": {f"node-{x}": down_cpu.node_pct.get(f"node-{x}") for x in sorted({c["exit"] for c in group_t})},
+            "relay_packets_down": {f"node-{r}": v for r, v in delta.items()}, "attrib_pct": attrib_pct,
             "reconnects": sum(e["reconnects"] for e in errs), "ping_timeouts": sum(e["ping_timeouts"] for e in errs),
             "disconnect_cmds": sum(dcmd), "connect_ms": [r.get("connect_ms") for r in conn],
-            "incomplete_down": sum(1 for r in down if not r["complete"]),
-            "incomplete_up": sum(1 for u in up if not u["complete"]),
+            "incomplete_down": sum(1 for r in down if not r.get("complete")),
+            "incomplete_up": sum(1 for u in up if not u.get("complete")),
         }
         table.append(rung)
         checks.row(kind="rung", **rung)
-        # (6) verdicts: every transfer within CAP; the traffic crossed the rung's relay(s)
-        bad = [f"{c['name']} down {r['bytes']} B in {r['elapsed']}s (http {r['code']})" for c, r in zip(group_t, down) if not r["complete"]]
-        bad += [f"{c['name']} up {u['bytes']} B in {u['elapsed']}s (http {u['code']})" for c, u in zip(group_t, up) if not u["complete"]]
+        # (6) verdicts: every transfer within CAP; the traffic crossed the relays
+        def why(c, r):
+            return f"{c['name']} {r.get('dir')} {r.get('bytes')} B (http {r.get('code')}{', ' + r['error'] if r.get('error') else ''})"
+        bad = [why(c, r) for c, r in zip(group_t, down) if not r.get("complete")] + [why(c, u) for c, u in zip(group_t, up) if not u.get("complete")]
         diag = (f"reconnects {rung['reconnects']} (tunnel-ping timeouts {rung['ping_timeouts']}), Disconnect commands {rung['disconnect_cmds']}, "
-                f"connected before the transfers {sum(connected)}/{n}")
+                f"connected before the transfers {sum(connected)}/{n}, start skew {dov['start_skew_s']}s down / {uov['start_skew_s'] if uov else '-'}s up")
         if bad:
             checks.failed(f"n={n}: {len(bad)} transfer(s) incomplete within CAP={k.CAP}s: " + "; ".join(bad) + f"; {diag}")
         else:
             checks.passed(f"n={n}: all {n} download(s) of {k.DOWN_BYTES} B" + (f" and upload(s) of {k.UP_BYTES} B" if up else "")
-                          + f" complete within CAP={k.CAP}s (slowest {max(r['elapsed'] for r in down + up)}s); {diag}")
+                          + f" complete within CAP={k.CAP}s (slowest {max(dov['slowest_s'] or 0, (uov or {}).get('slowest_s') or 0)}s); {diag}")
         if attrib_pct is None:
             checks.warn(f"n={n}: no {k.RELAY_METRIC} counts from the relays; attribution not checked (RELAY_METRIC)")
         else:
             relays_named = ['node-%d' % r for r in mine]
-            want = attribution_floor(sum(r["bytes"] for r in down), k.PKT_BYTES_MAX)
-            checks.assert_min(f"n={n}: packets forwarded by {relays_named} during the download (floor: one per "
-                              f"{k.PKT_BYTES_MAX} B downloaded = {want})", on_mine, "packets", "floor", want)
-            if len(topo["relays"]) > 1:
+            want = attribution_floor(sum(r.get("bytes") or 0 for r in down), k.PKT_BYTES_MAX)
+            checks.assert_min(f"n={n}: packets forwarded by {relays_named if len(relays_named) <= 5 else str(len(relays_named)) + ' relays'} "
+                              f"during the download (floor: one per {k.PKT_BYTES_MAX} B downloaded = {want})", on_mine, "packets", "floor", want)
+            if len(topo["relays"]) > 1 and mode != "single-exit":
                 checks.assert_min(f"n={n}: share of relayed packets on the rung's relay(s) {relays_named} "
                                   f"({on_mine} of {tot})", attrib_pct, "%", "ATTRIB_MIN_PCT", k.ATTRIB_MIN_PCT)
             else:
-                checks.record(f"n={n}: one relay in the topology, share of relayed packets not scored ({on_mine} forwarded)")
-        checks.record(f"n={n}: down {rung['down_avg_mbit']} Mbit/s per client (min {rung['down_min_mbit']}), "
-                      f"aggregate {rung['down_agg_mbit']}; up {rung['up_avg_mbit']} per client, aggregate {rung['up_agg_mbit']}; "
-                      f"machine CPU {cpu_text(rung['host_cpu_down_pct'], rung['host_cpu_down_max'])} down / "
-                      f"{cpu_text(rung['host_cpu_up_pct'], rung['host_cpu_up_max'])} up, "
-                      f"relay CPU (one core = 100) {rung['relay_cpu_down_pct']}")
+                checks.record(f"n={n}: share of relayed packets not scored ({'one relay' if len(topo['relays']) == 1 else 'return paths not pinned'}; "
+                              f"{on_mine} forwarded)")
+        checks.record(f"n={n}: overlap rates, down {rung['down_avg_mbit']} Mbit/s per client (min {rung['down_min_mbit']}), aggregate "
+                      f"{rung['down_agg_mbit']} over {rung['down_window_s']}s; up {rung['up_avg_mbit']} per client (min {rung['up_min_mbit']}), "
+                      f"aggregate {rung['up_agg_mbit']} over {rung['up_window_s']}s; {under_test} {rung['ut_nodes']}: machine "
+                      f"{rung['ut_machine_cpu_down']} % / {rung['ut_machine_cpu_up']} %, process {rung['ut_process_cpu_down']} / "
+                      f"{rung['ut_process_cpu_up']} (down / up; process % of one core)")
     if table:
-        write_table(run, checks.test, mode, topo, k, table)
+        write_table(run, checks.test, mode, topo, k, table, info, under_test)
     return table
+
+
+def attribution_floor(nbytes, pkt_bytes_max):
+    """Fewest packets the relays must have forwarded for nbytes to have crossed them: a HOPR packet carries at most
+    pkt_bytes_max bytes of payload, so fewer means some of the download took another route."""
+    return -(-int(nbytes) // int(pkt_bytes_max))
 
 
 def cpu_text(d, mx=None):
@@ -274,18 +369,27 @@ def cpu_text(d, mx=None):
     return " / ".join(f"{k} {v} %" + (f" (max {mx[k]})" if k in mx else "") for k, v in sorted(d.items()))
 
 
-def write_table(run, test, mode, topo, k, table):
-    """<TEST>.md in the run directory: one line per rung, the numbers a reader compares."""
-    head = ("| clients | down Mbit/s per client (min) | down aggregate | up Mbit/s per client (min) | up aggregate "
-            "| machine CPU down | machine CPU up | relay CPU down % | reconnects (ping timeouts) |")
-    lines = [f"# {test} ({mode}, {topo['n']} clients max)", "",
-             f"{k.DOWN_BYTES} B down then {k.UP_BYTES} B up per client, all clients at once, cap {k.CAP} s, "
-             f"idle {k.IDLE_S} s after connect, {k.PAUSE_S} s between phases and rungs. Machine CPU is % of all its cores, "
-             f"relay CPU % of one core.", "",
-             head, "|" + " --- |" * 9]
+def _proc(d):
+    vals = [v for v in (d or {}).values() if v is not None]
+    return "n/a" if not vals else (f"{vals[0]} %" if len(vals) == 1 else f"{round(sum(vals) / len(vals), 1)} % mean of {len(vals)}")
+
+
+def write_table(run, test, mode, topo, k, table, info, under_test):
+    """<TEST>.md in the run directory: the stack, then one line per rung with the numbers a reader compares."""
+    lines = [f"# {test} ({mode}, up to {topo['n']} clients)", "",
+             f"- hoprd: {info['hoprd']['relay']} (relays), {info['hoprd']['exit']} (exits)",
+             f"- client: {info['client']} (image {info['client_image']})"]
+    lines += [f"- {role} machines: {spec}" for role, spec in sorted(info["machines"].items())]
+    lines += ["", f"{k.DOWN_BYTES} B down, then {k.UP_BYTES} B up, on every client at once (one common start), cap {k.CAP} s; "
+              f"idle {k.IDLE_S} s after connect, {k.PAUSE_S} s between phases and rungs. Rates are over the overlap: from the last "
+              f"transfer's first byte to the first transfer's last byte. Under test: the {under_test}; machine CPU is % of all its cores, "
+              f"process CPU % of one core, both from the common start to the last finish.", "",
+              f"| clients | down per client, mean (min) Mbit/s | down aggregate | up per client, mean (min) | up aggregate "
+              f"| {under_test} machine CPU down / up | {under_test} process CPU down / up | start skew down / up s | reconnects (ping timeouts) |",
+              "|" + " --- |" * 9]
     for r in table:
         lines.append(f"| {r['n']} | {r['down_avg_mbit']} ({r['down_min_mbit']}) | {r['down_agg_mbit']} | {r['up_avg_mbit']} ({r['up_min_mbit']}) "
-                     f"| {r['up_agg_mbit']} | {cpu_text(r['host_cpu_down_pct'], r.get('host_cpu_down_max'))} "
-                     f"| {cpu_text(r['host_cpu_up_pct'], r.get('host_cpu_up_max'))} "
-                     f"| {', '.join(f'{a} {b}' for a, b in r['relay_cpu_down_pct'].items())} | {r['reconnects']} ({r['ping_timeouts']}) |")
+                     f"| {r['up_agg_mbit']} | {r['ut_machine_cpu_down']} % / {r['ut_machine_cpu_up']} % "
+                     f"| {_proc(r['ut_process_cpu_down'])} / {_proc(r['ut_process_cpu_up'])} | {r['down_start_skew_s']} / {r['up_start_skew_s']} "
+                     f"| {r['reconnects']} ({r['ping_timeouts']}) |")
     (run / f"{test}.md").write_text("\n".join(lines) + "\n")

@@ -210,13 +210,19 @@ def start_clusters(roles, n_relays, n_exits, n_extras, token):
     Returns [(role, machine, status)] in global id order: relays first."""
     plan = [("relays", m, k) for m, k in spread(n_relays, roles["relays"]["machines"])] + \
            [("exits", m, k) for m, k in spread(n_exits, roles["exits"]["machines"])]
-    first_relay = next(i for i, p in enumerate(plan) if p[0] == "relays")
+    # the clients' identities: a localcluster mints at most 5, so they are spread over the clusters in plan order
+    extras, left = [], n_extras
+    for _ in plan:
+        extras.append(min(5, left))
+        left -= extras[-1]
+    if left:
+        raise SystemExit(f"{n_extras} client identities need at least {-(-n_extras // 5)} node machines (5 per localcluster)")
     if len(plan) == 2 and plan[0][2] == plan[1][2] == 1:
         raise SystemExit("one relay and one exit: neither cluster can become ready alone; use at least three nodes")
     # larger clusters first; a one-node cluster started first becomes ready once the next one's nodes come up
     for i in sorted(range(len(plan)), key=lambda i: -plan[i][2]):
         rname, m, k = plan[i]
-        launch_cluster(roles, rname, m, k, n_extras if i == first_relay else 0, token)
+        launch_cluster(roles, rname, m, k, extras[i], token)
         wait_cluster(roles, rname, m, "spawned")
     out = []
     for rname, m, k in plan:
@@ -226,25 +232,27 @@ def start_clusters(roles, n_relays, n_exits, n_extras, token):
 
 
 def merge(roles, opts, started):
-    nodes, extras, extras_ssh, gid = [], [], None, 0
+    """One status for every machine's cluster: nodes with global ids (relays first), the clients' identities with
+    global ids in the same order, each with the machine that holds its keystore."""
+    nodes, extras, gid = [], [], 0
     for rname, m, st in started:
         for nd in sorted(st.get("nodes", []), key=lambda x: x["id"]):
             port = str(nd.get("api_url", "")).rsplit(":", 1)[-1].strip("/")
             nodes.append(dict(nd, id=gid, cluster_id=nd["id"], role=rname, ssh=m.get("ssh"), machine=m["name"],
                               api_url=f"http://{m['addr']}:{port}"))
             gid += 1
-        if st.get("extras"):
-            extras, extras_ssh = st["extras"], m.get("ssh")
+        for ex in sorted(st.get("extras") or [], key=lambda x: x["id"]):
+            extras.append(dict(ex, id=len(extras), cluster_id=ex["id"], ssh=m.get("ssh")))
     return {"state": "running", "multihost": True, "blokli_url": chain_url(roles), "nodes": nodes, "extras": extras,
-            "extras_ssh": extras_ssh, "ssh_options": opts, "clients": {},
+            "extras_ssh": extras[0]["ssh"] if extras else None, "ssh_options": opts, "clients": {},
             "machines": {r: [{"name": m["name"], "ssh": m.get("ssh"), "addr": m.get("addr")} for m in roles[r]["machines"]] for r in ROLES}}
 
 
 def fetch_extras(opts, merged, cfg):
-    """The clients' identities, minted by the first relay cluster, into the runner's CONFIG_DIR as client.sh expects."""
-    h = Host(merged["extras_ssh"], opts)
+    """The clients' identities, minted by the clusters, into the runner's CONFIG_DIR as client.sh expects."""
     for ex in merged["extras"]:
         i = ex["id"]
+        h = Host(ex.get("ssh"), opts)
         (cfg.config_dir / f"extra_id_{i}.id").write_text(h.out(f"cat {shlex.quote(ex['keystore_path'])}"))
         (cfg.config_dir / f"extra_id_{i}.password").write_text(ex["password"] + "\n")
         (cfg.config_dir / f"extra_id_{i}.safe").write_text(ex["safe_address"] + "\n")

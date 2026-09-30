@@ -169,6 +169,10 @@ def test_multihost_merge_spread_and_client_docker(tmp_path):
     assert [(n["id"], n["role"], n["machine"], n["api_url"]) for n in m["nodes"]] == [
         (0, "relays", "relay-1", "http://10.0.0.2:3000"), (1, "exits", "exit-1", "http://10.0.0.3:3100")]
     assert m["blokli_url"] == "http://10.0.0.1:8080" and m["extras_ssh"] == "root@10.0.0.2"
+    assert [(x["id"], x["ssh"]) for x in m["extras"]] == [(0, "root@10.0.0.2")]
+    two = multihost.merge(roles, "", [("relays", r1, {"nodes": [], "extras": [{"id": 0}, {"id": 1}]}),
+                                      ("exits", e1, {"nodes": [], "extras": [{"id": 0}]})])
+    assert [(x["id"], x["cluster_id"], x["ssh"]) for x in two["extras"]] == [(0, 0, "root@10.0.0.2"), (1, 1, "root@10.0.0.2"), (2, 0, "root@10.0.0.3")]
     m["clients"] = {"gnosis_vpn-client": {"ssh": "root@10.0.0.9"}, "gnosis_vpn-client-2": {"ssh": None}}
     f = tmp_path / "mh.json"
     f.write_text(json.dumps(m))
@@ -197,3 +201,40 @@ def test_single_exit_layout_and_channels():
     assert any("2 channels out" in p and "want 3" in p for p in relaytopo.check_channels(topo, one_short)[0])
     wrong = ok[:-1] + [ch(addr(3), addr(9))]
     assert any("want node-0, node-1, node-2" in p for p in relaytopo.check_channels(topo, wrong)[0])
+
+
+def test_overlap_rates_use_the_window_all_transfers_share():
+    from suitelib.relaybench import interp, overlap
+    # client A moves 10 MB/s from t=0 to t=10, client B moves 5 MB/s from t=2 to t=12
+    a = {"start": 0.0, "first": 0.0, "last": 10.0, "samples": [[0.0, 0], [10.0, 100_000_000]]}
+    b = {"start": 0.5, "first": 2.0, "last": 12.0, "samples": [[2.0, 0], [12.0, 50_000_000]]}
+    assert interp(a["samples"], 5.0) == 50_000_000 and interp(b["samples"], 1.0) == 0 and interp(b["samples"], 20) == 50_000_000
+    o = overlap([a, b])
+    assert o["window"] == [2.0, 10.0] and o["window_s"] == 8.0 and o["start_skew_s"] == 0.5
+    assert o["per_client_mbit"] == [80.0, 40.0] and o["agg_mbit"] == 120.0 and o["min_mbit"] == 40.0
+    single = overlap([a])
+    assert single["agg_mbit"] == 80.0 and single["window_s"] == 10.0
+    dead = overlap([a, {"start": 0.1, "first": None, "last": None, "samples": []}])
+    assert dead["agg_mbit"] == 0 and dead["window"] is None
+
+
+def test_transferprobe_download_and_upload_against_the_target():
+    import subprocess
+    import threading
+    tests = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(tests.parent / "docker" / "target"))
+    import speedtarget
+    from http.server import ThreadingHTTPServer
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), speedtarget.Handler)
+    speedtarget.CHUNK = speedtarget.make_chunk(speedtarget.DEFAULT_SEED)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        for d in ("down", "up"):
+            r = subprocess.run([sys.executable, str(tests / "probes" / "transferprobe.py"), "--host", "127.0.0.1", "--port", str(port),
+                                "--dir", d, "--bytes", "3000000", "--tick", "0.01"], capture_output=True, text=True, timeout=60)
+            out = json.loads(r.stdout)
+            assert out["complete"] and out["bytes"] == 3000000 and out["code"] == 200, out
+            assert out["samples"][-1][1] == 3000000 and out["first"] <= out["last"]
+    finally:
+        srv.shutdown()

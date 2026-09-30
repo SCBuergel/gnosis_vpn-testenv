@@ -1,23 +1,28 @@
 """T34-single-relay-scaling (gate): how many concurrent clients can one relay carry? Rungs of LADDER="1 2 3 4 5":
 n clients, each with its own exit, all through the same single relay in both directions (client k -> relay ->
-exit k, and back over the relay), download DOWN_BYTES=25 MB at once, then upload UP_BYTES at once. Read against
-T33-relay-baseline, where the same number of clients has as many relays: where this ladder falls below that one,
-the single relay is the limit, not the host.
+exit k, and back over the relay), download DOWN_BYTES=100 MB at once, then upload UP_BYTES=100 MB at once. Its twin
+is T35-single-exit-scaling (one exit, a relay per client): same ladder, same settings, same report, so the two read
+side by side; T33-relay-baseline runs the ladder with a relay and an exit per client.
 
-The rest is T33-relay-baseline's procedure: the channel graph is held against the topology before every rung
-(every client and every exit exactly one Open channel, to the one relay), IDLE_S=10 after connecting, PAUSE_S=10
-between phases and rungs, FAIL only when a transfer does not complete within CAP=180 s, rates recorded not scored,
-the relay must have forwarded at least one packet per PKT_BYTES_MAX downloaded bytes (with one relay the share
-check of T33 is 100 % by construction and only recorded), relay and host CPU recorded next to the rates.
+Procedure (suitelib/relaybench.py): the channel graph is held against the topology before every rung (every client
+and every exit exactly one Open channel, to the one relay); IDLE_S=10 after connecting (below the suite's
+SURB_RAMP_WAIT floor on purpose, by request); every transfer of a phase starts at one common second (START_LEAD_S=5
+after it is handed out; the start skew is reported); PAUSE_S=10 between download, upload and rungs. FAIL only when a
+transfer does not complete within CAP=300 s (100 MB in 300 s is 2.67 Mbit/s). The rates are recorded, not scored, over
+the overlap: the window in which every client was transferring, from the last first byte to the first last byte.
+Reported per rung: the relay's machine CPU (% of all its cores) and its hoprd process's CPU (% of one core), the other
+roles' machines, the hoprd and client versions and one line of machine specs per role. The relay must have forwarded
+at least one packet per PKT_BYTES_MAX downloaded bytes (the share check of T33 is 100 % by construction here and only
+recorded).
 
-Setup: `just relay-topology shared 5` (CLUSTER_SIZE=6 with --channel-management none: one relay, five exits, five
-clients, five VPN servers), then `just test t34`. SKIP on any other stack."""
+Setup: `just relay-topology shared N` on one machine, or `just multihost-up HOSTS shared N` across machines, then
+`just test t34` / `just multihost-test t34`. SKIP on any other stack."""
 from suitelib import relaybench
 
 TEST = "T34-single-relay-scaling"
 KIND = "gate"
 GROUP = "relayscale"
-KNOBS = dict(relaybench.KNOBS)
+KNOBS = dict(relaybench.SCALING_KNOBS)
 
 
 def TIMEOUT(knobs):
@@ -25,4 +30,4 @@ def TIMEOUT(knobs):
 
 
 def test_single_relay_scaling(cfg, run, cluster, target, checks, knobs):
-    relaybench.run_ladder(cfg, run, cluster, target, checks, knobs, "shared")
+    relaybench.run_ladder(cfg, run, cluster, target, checks, knobs, "shared", under_test="relay")
