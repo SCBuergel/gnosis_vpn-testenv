@@ -143,14 +143,21 @@ def create(a):
         group, size, count = spec.split(":")
         groups.append(([f"{group}-{i}" for i in range(1, int(count) + 1)], size))
     names, ids = [], []
-    for members, size in groups:
-        full = [prefix(a.name) + m for m in members]
-        names += full
-        for i in range(0, len(full), 10):                   # the API takes at most 10 names per request
-            image = int(a.image) if str(a.image).isdigit() else a.image     # a snapshot is an id, a distribution a slug
-            body = {"names": full[i:i + 10], "region": a.region, "size": size, "image": image, "ipv6": False,
-                    "monitoring": False, "user_data": USER_DATA.format(pubkey=pub)}
-            ids += [d["id"] for d in api("POST", "/droplets", body)["droplets"]]
+    try:
+        for members, size in groups:
+            full = [prefix(a.name) + m for m in members]
+            names += full
+            for i in range(0, len(full), 10):               # the API takes at most 10 names per request
+                image = int(a.image) if str(a.image).isdigit() else a.image     # a snapshot is an id, a distribution a slug
+                body = {"names": full[i:i + 10], "region": a.region, "size": size, "image": image, "ipv6": False,
+                        "monitoring": False, "user_data": USER_DATA.format(pubkey=pub)}
+                ids += [d["id"] for d in api("POST", "/droplets", body)["droplets"]]
+    except SystemExit as e:
+        # a refusal half-way (the account's droplet limit) must not leave the first groups running untracked
+        print(f"create failed after {len(ids)} droplet(s): {e}; deleting them", file=sys.stderr)
+        state_file(a.name).write_text(json.dumps({"name": a.name, "ids": ids}))
+        destroy(argparse.Namespace(name=a.name))
+        raise
     assign_to_project(getattr(a, "project", PROJECT), ids)
     state_file(a.name).write_text(json.dumps({"name": a.name, "ids": ids, "region": a.region, "size": a.size,
                                               "created": time.strftime("%FT%TZ", time.gmtime())}, indent=2))
