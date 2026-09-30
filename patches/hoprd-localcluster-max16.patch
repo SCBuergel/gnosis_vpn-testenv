@@ -1,5 +1,5 @@
 diff --git a/localcluster/src/identity.rs b/localcluster/src/identity.rs
-index 6224a0f..decdb91 100644
+index 6224a0f..35fb241 100644
 --- a/localcluster/src/identity.rs
 +++ b/localcluster/src/identity.rs
 @@ -39,7 +39,10 @@ pub const DEFAULT_PRIVATE_KEY: &str =
@@ -45,7 +45,24 @@ index 6224a0f..decdb91 100644
              frozen_hopr_keys(*packet_key, *chain_key)
                  .with_context(|| format!("frozen keys of node {id}"))?
          };
-@@ -747,7 +751,7 @@ mod tests {
+@@ -578,8 +582,14 @@ pub async fn generate(config: &GenerationConfig) -> anyhow::Result<GenerationOut
+         for (id, (packet_key, chain_key)) in
+             EXTRA_SECRETS.iter().take(effective_num_extras).enumerate()
+         {
+-            let kp = frozen_hopr_keys(*packet_key, *chain_key)
+-                .with_context(|| format!("frozen keys of extra identity {id}"))?;
++            // testenv patch: with random node identities the extras are random too, so several clusters on one chain
++            // (the multi-machine testenv) never mint the same client identity twice
++            let kp = if config.random_identities {
++                HoprKeys::random()
++            } else {
++                frozen_hopr_keys(*packet_key, *chain_key)
++                    .with_context(|| format!("frozen keys of extra identity {id}"))?
++            };
+             let node_address = kp.chain_key.public().to_address();
+             info!(extra_id = %id, address = %node_address, "extra identity");
+ 
+@@ -747,7 +757,7 @@ mod tests {
      #[test]
      fn frozen_identities_have_stable_addresses() -> anyhow::Result<()> {
          /// `(EVM address, announced offchain key)` per frozen identity.

@@ -170,8 +170,8 @@ def test_multihost_merge_spread_and_client_docker(tmp_path):
         (0, "relays", "relay-1", "http://10.0.0.2:3000"), (1, "exits", "exit-1", "http://10.0.0.3:3100")]
     assert m["blokli_url"] == "http://10.0.0.1:8080" and m["extras_ssh"] == "root@10.0.0.2"
     assert [(x["id"], x["ssh"]) for x in m["extras"]] == [(0, "root@10.0.0.2")]
-    two = multihost.merge(roles, "", [("relays", r1, {"nodes": [], "extras": [{"id": 0}, {"id": 1}]}),
-                                      ("exits", e1, {"nodes": [], "extras": [{"id": 0}]})])
+    two = multihost.merge(roles, "", [("relays", r1, {"nodes": [], "extras": [{"id": 0, "address": addr(50)}, {"id": 1, "address": addr(51)}]}),
+                                      ("exits", e1, {"nodes": [], "extras": [{"id": 0, "address": addr(52)}]})])
     assert [(x["id"], x["cluster_id"], x["ssh"]) for x in two["extras"]] == [(0, 0, "root@10.0.0.2"), (1, 1, "root@10.0.0.2"), (2, 0, "root@10.0.0.3")]
     m["clients"] = {"gnosis_vpn-client": {"ssh": "root@10.0.0.9"}, "gnosis_vpn-client-2": {"ssh": None}}
     f = tmp_path / "mh.json"
@@ -238,3 +238,16 @@ def test_transferprobe_download_and_upload_against_the_target():
             assert out["samples"][-1][1] == 3000000 and out["first"] <= out["last"]
     finally:
         srv.shutdown()
+
+
+
+def test_multihost_refuses_duplicate_client_identities():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import multihost
+    r1 = {"name": "relay-1", "ssh": "root@a", "addr": "10.0.0.2"}
+    e1 = {"name": "exit-1", "ssh": "root@b", "addr": "10.0.0.3"}
+    roles = {"chain": {"machines": [{"name": "c", "ssh": None, "addr": "10.0.0.1"}]}, "relays": {"machines": []},
+             "exits": {"machines": []}, "clients": {"machines": []}}
+    frozen = [{"id": 0, "address": addr(60)}, {"id": 1, "address": addr(61)}]
+    with pytest.raises(SystemExit, match="are the same"):
+        multihost.merge(roles, "", [("relays", r1, {"nodes": [], "extras": frozen}), ("exits", e1, {"nodes": [], "extras": frozen})])

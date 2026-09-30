@@ -243,6 +243,15 @@ def merge(roles, opts, started):
             gid += 1
         for ex in sorted(st.get("extras") or [], key=lambda x: x["id"]):
             extras.append(dict(ex, id=len(extras), cluster_id=ex["id"], ssh=m.get("ssh")))
+    # two clients with one identity share a peer id: the network delivers one client's return traffic to the other.
+    # An unpatched localcluster mints its extras from five frozen secrets, so every cluster minted the same five.
+    seen = {}
+    for ex in extras:
+        a = str(ex.get("address", "")).lower()
+        if a and a in seen:
+            raise SystemExit(f"client identities {seen[a]} and {ex['id']} are the same ({a}): build the localcluster with "
+                             f"patches/hoprd-localcluster-max16.patch (random extras), or use at most 5 clients")
+        seen[a] = ex["id"]
     return {"state": "running", "multihost": True, "blokli_url": chain_url(roles), "nodes": nodes, "extras": extras,
             "extras_ssh": extras[0]["ssh"] if extras else None, "ssh_options": opts, "clients": {},
             "machines": {r: [{"name": m["name"], "ssh": m.get("ssh"), "addr": m.get("addr")} for m in roles[r]["machines"]] for r in ROLES}}
