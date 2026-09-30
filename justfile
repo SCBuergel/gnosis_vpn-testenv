@@ -431,6 +431,26 @@ relay-topology mode n *args:
 relay-topology-check:
     python3 "{{justfile_directory()}}/tests/relay_topology.py" check
 
+# Multi-machine testenv (tests/multihost.py, multihost/hosts.example.toml): what every machine in HOSTS has
+multihost-check hosts:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" check
+
+# Take the multi-machine stack down and bring up `paired N`, `shared N` (T33/T34) or `standard N` (T22) across HOSTS
+multihost-up hosts mode n *args:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" up "{{mode}}" "{{n}}" {{args}}
+
+# Stop the multi-machine stack on every machine in HOSTS
+multihost-down hosts:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" down
+
+# Run one test against the multi-machine stack (CONFIG_DIR/multihost.env: merged status, target, destination)
+multihost-test name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(just _suite-env)"
+    . "{{CONFIG_DIR}}/multihost.env"
+    cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression --only "{{name}}" --no-preconditions {{args}}
+
 # Run the suite across version/config cells from a cells file (see tests/matrix.py --help)
 matrix cells *args:
     #!/usr/bin/env bash

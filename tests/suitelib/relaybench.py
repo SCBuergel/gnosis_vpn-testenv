@@ -7,13 +7,13 @@ Open channel, to its relay; anything else fails the rung before a byte moves), c
 parallel, wait IDLE_S, download in parallel, wait PAUSE_S, upload in parallel, disconnect. PAUSE_S also separates
 the rungs. Each transfer runs under curl's CAP; a rung passes iff every transfer of it completes within CAP.
 
-Recorded next to the rates: host CPU (all cores, /proc/stat) and each relay's and exit's hoprd CPU over each phase,
+Recorded next to the rates: each machine's CPU (all cores, /proc/stat, read on that machine) and each relay's and exit's
+hoprd CPU over each phase,
 because on one host the machine is the likely ceiling and the baseline is only readable next to it; each relay's
 forwarded-packet count over the download, which shows the traffic crossed the assigned relays: they forwarded at
 least one packet per PKT_BYTES_MAX downloaded bytes (a HOPR packet carries less, so a download that bypassed the relays
 fails it), and, with more than one relay in the topology, ATTRIB_MIN_PCT of all relayed packets were on the rung's own
 relays (with one relay that share is 100 % by construction and is not scored); reconnects next to tunnel-ping timeouts."""
-import os
 import statistics as st
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import relaytopo
 from .client import Client, ConnectFailed
 from .client import telemetry_sum
+from .hosts import Host
 from .target import curl_down, curl_up
 from .verdicts import log, utc_now
 
@@ -35,48 +36,51 @@ def timeout(knobs, connect_timeout=240):
     return rungs * per + 300
 
 
-_TICK = os.sysconf("SC_CLK_TCK")
-
-
-def host_cpu():
-    """(busy, total) jiffies over all cores from /proc/stat."""
-    with open("/proc/stat") as f:
-        v = [int(x) for x in f.readline().split()[1:]]
-    idle = v[3] + (v[4] if len(v) > 4 else 0)
-    return sum(v) - idle, sum(v)
-
-
-def pid_cpu(pid):
-    """utime + stime of a process in seconds, or None when it is gone."""
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            p = f.read().rsplit(")", 1)[1].split()
-        return (int(p[11]) + int(p[12])) / _TICK
-    except (OSError, IndexError, ValueError):
-        return None
+def cpu_groups(cfg, topo, status):
+    """Where to sample CPU: {label: (Host, {node name: pid})}. One local group ("host") on a single-machine stack; on a
+    multi-machine stack (status nodes carry "ssh") one group per machine, labelled by the roles it plays, plus the
+    clients' machine (this one)."""
+    node = {nd["id"]: nd for nd in status.get("nodes", [])}
+    opts = cfg.env.get("MULTIHOST_SSH_OPTS", "")
+    groups, roles = {}, {}
+    for role, ids in (("relays", topo["relays"]), ("exits", topo["exits"])):
+        for i in ids:
+            nd = node.get(i, {})
+            key = nd.get("ssh") or "local"
+            groups.setdefault(key, {})[f"node-{i}"] = nd.get("pid")
+            roles.setdefault(key, set()).add(role)
+    if all(key == "local" for key in groups):
+        return {"host": (Host(None), groups.get("local", {}))}
+    roles.setdefault("local", set()).add("clients")
+    groups.setdefault("local", {})
+    return {"+".join(sorted(roles[key])): (Host(key, opts), pids) for key, pids in groups.items()}
 
 
 class CpuWindow:
-    """Host busy % (100 = every core busy) and per-node hoprd CPU (% of one core) over a phase."""
+    """Busy % of each machine (100 = every core busy) and each node's hoprd CPU (% of one core) over a phase."""
 
-    def __init__(self, pids):
-        self.pids = pids
+    def __init__(self, groups):
+        self.groups = groups
+
+    def _sample(self):
+        return {label: host.cpu_sample(pids.values()) for label, (host, pids) in self.groups.items()}
 
     def __enter__(self):
         self.t0 = time.time()
-        self.h0 = host_cpu()
-        self.p0 = {k: pid_cpu(p) for k, p in self.pids.items()}
+        self.s0 = self._sample()
         return self
 
     def __exit__(self, *exc):
         dt = max(time.time() - self.t0, 1e-6)
-        h1 = host_cpu()
-        busy, total = h1[0] - self.h0[0], h1[1] - self.h0[1]
-        self.host_pct = round(100 * busy / total, 1) if total > 0 else None
-        self.node_pct = {}
-        for k, p in self.pids.items():
-            a, b = self.p0.get(k), pid_cpu(p)
-            self.node_pct[k] = round(100 * (b - a) / dt, 1) if a is not None and b is not None else None
+        s1 = self._sample()
+        self.host_pct, self.node_pct = {}, {}
+        for label, (host, pids) in self.groups.items():
+            (b0, t0, p0), (b1, t1, p1) = self.s0[label], s1[label]
+            ok = None not in (b0, t0, b1, t1) and t1 > t0
+            self.host_pct[label] = round(100 * (b1 - b0) / (t1 - t0), 1) if ok else None
+            for name, pid in pids.items():
+                a, b = p0.get(pid), p1.get(pid)
+                self.node_pct[name] = round(100 * (b - a) / dt, 1) if a is not None and b is not None else None
         return False
 
 
@@ -85,9 +89,9 @@ def _parallel(fn, items):
         return list(ex.map(fn, items))
 
 
-def _phase(group, fn, pids):
+def _phase(group, fn, groups):
     """Run fn(client) for every client at once; returns (results, wall seconds, CpuWindow)."""
-    with CpuWindow(pids) as cpu:
+    with CpuWindow(groups) as cpu:
         t0 = time.time()
         res = _parallel(fn, group)
         wall = time.time() - t0
@@ -125,8 +129,7 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
         checks.failed(f"client container or tools sidecar missing: {missing} (just relay-topology {mode} {topo['n']})")
         return
     status = cluster.status() or {}
-    node = {nd["id"]: nd for nd in status.get("nodes", [])}
-    pids = {f"node-{i}": node.get(i, {}).get("pid") for i in topo["relays"] + topo["exits"]}
+    groups = cpu_groups(cfg, topo, status)
     checks.row(kind="topology", topology={x: topo.get(x) for x in ("mode", "n", "relays", "exits", "clients", "created", "ready",
                                                                    "exit_channel_funding", "client_image", "hoprd_bin")},
                client_version=clients[1].version())
@@ -172,12 +175,12 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
         connected = [cl.is_connected() for cl in group]
         # (3) downloads at once, relay packet counts around them
         before = relay_counts()
-        down, down_wall, down_cpu = _phase(group, lambda cl: curl_down(cl, target.ip, k.DOWN_BYTES, k.CAP), pids)
+        down, down_wall, down_cpu = _phase(group, lambda cl: curl_down(cl, target.ip, k.DOWN_BYTES, k.CAP), groups)
         after = relay_counts()
         up, up_wall, up_cpu = [], 0, None
         if k.UP_BYTES > 0:
             time.sleep(k.PAUSE_S)
-            up, up_wall, up_cpu = _phase(group, lambda cl: curl_up(cl, target.ip, k.UP_BYTES, k.CAP), pids)
+            up, up_wall, up_cpu = _phase(group, lambda cl: curl_up(cl, target.ip, k.UP_BYTES, k.CAP), groups)
         errs = [cl.log_errors(since) for cl in group]
         dcmd = [cl.count_log(since, r"received socket command.*command=Disconnect") for cl in group]
         for c, cl in zip(group_t, group):
@@ -242,23 +245,33 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode):
                 checks.record(f"n={n}: one relay in the topology, share of relayed packets not scored ({on_mine} forwarded)")
         checks.record(f"n={n}: down {rung['down_avg_mbit']} Mbit/s per client (min {rung['down_min_mbit']}), "
                       f"aggregate {rung['down_agg_mbit']}; up {rung['up_avg_mbit']} per client, aggregate {rung['up_agg_mbit']}; "
-                      f"host CPU {rung['host_cpu_down_pct']} % down / {rung['host_cpu_up_pct']} % up, "
+                      f"machine CPU {cpu_text(rung['host_cpu_down_pct'])} down / {cpu_text(rung['host_cpu_up_pct'])} up, "
                       f"relay CPU (one core = 100) {rung['relay_cpu_down_pct']}")
     if table:
         write_table(run, checks.test, mode, topo, k, table)
     return table
 
 
+def cpu_text(d):
+    """{"host": 93.1} -> "93.1 %"; {"clients": 40.0, "relays": 97.2} -> "clients 40.0 % / relays 97.2 %"."""
+    if not d:
+        return "n/a"
+    if list(d) == ["host"]:
+        return f"{d['host']} %"
+    return " / ".join(f"{k} {v} %" for k, v in d.items())
+
+
 def write_table(run, test, mode, topo, k, table):
     """<TEST>.md in the run directory: one line per rung, the numbers a reader compares."""
     head = ("| clients | down Mbit/s per client (min) | down aggregate | up Mbit/s per client (min) | up aggregate "
-            "| host CPU down / up % | relay CPU down % | reconnects (ping timeouts) |")
+            "| machine CPU down | machine CPU up | relay CPU down % | reconnects (ping timeouts) |")
     lines = [f"# {test} ({mode}, {topo['n']} clients max)", "",
              f"{k.DOWN_BYTES} B down then {k.UP_BYTES} B up per client, all clients at once, cap {k.CAP} s, "
-             f"idle {k.IDLE_S} s after connect, {k.PAUSE_S} s between phases and rungs. Relay CPU is % of one core.", "",
-             head, "|" + " --- |" * 8]
+             f"idle {k.IDLE_S} s after connect, {k.PAUSE_S} s between phases and rungs. Machine CPU is % of all its cores, "
+             f"relay CPU % of one core.", "",
+             head, "|" + " --- |" * 9]
     for r in table:
         lines.append(f"| {r['n']} | {r['down_avg_mbit']} ({r['down_min_mbit']}) | {r['down_agg_mbit']} | {r['up_avg_mbit']} ({r['up_min_mbit']}) "
-                     f"| {r['up_agg_mbit']} | {r['host_cpu_down_pct']} / {r['host_cpu_up_pct']} "
+                     f"| {r['up_agg_mbit']} | {cpu_text(r['host_cpu_down_pct'])} | {cpu_text(r['host_cpu_up_pct'])} "
                      f"| {', '.join(f'{a} {b}' for a, b in r['relay_cpu_down_pct'].items())} | {r['reconnects']} ({r['ping_timeouts']}) |")
     (run / f"{test}.md").write_text("\n".join(lines) + "\n")

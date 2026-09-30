@@ -115,3 +115,43 @@ def test_attribution_floor_rounds_up():
     from suitelib.relaybench import attribution_floor
     assert attribution_floor(25_000_000, 1000) == 25_000
     assert attribution_floor(1001, 1000) == 2
+
+
+def test_parse_cpu_sample():
+    from suitelib.hosts import parse_cpu_sample
+    lines = ["100", "cpu  10 0 10 70 10 0 0 0 0 0",
+             "42 42 (hoprd x) S 1 2 3 4 5 6 7 8 9 10 250 50 0 0",
+             "43 "]
+    busy, total, per = parse_cpu_sample(lines)
+    assert (busy, total) == (20, 100)
+    assert per == {42: 3.0, 43: None}
+    assert parse_cpu_sample([]) == (None, None, {})
+
+
+def test_cpu_groups_single_and_multi_machine():
+    from suitelib.config import Config
+    from suitelib.relaybench import cpu_groups, cpu_text
+    topo = relaytopo.layout("paired", 1)
+    single = {"nodes": [{"id": 0, "pid": 10}, {"id": 1, "pid": 11}]}
+    g = cpu_groups(Config({}), topo, single)
+    assert list(g) == ["host"] and g["host"][1] == {"node-0": 10, "node-1": 11}
+    multi = {"nodes": [{"id": 0, "pid": 10, "ssh": "root@r"}, {"id": 1, "pid": 11, "ssh": "root@e"}]}
+    g = cpu_groups(Config({}), topo, multi)
+    assert sorted(g) == ["clients", "exits", "relays"]
+    assert g["relays"][1] == {"node-0": 10} and g["clients"][1] == {}
+    assert cpu_text({"host": 93.1}) == "93.1 %"
+    assert cpu_text({"clients": 40.0, "relays": 97.2}) == "clients 40.0 % / relays 97.2 %"
+
+
+def test_multihost_merge_gives_global_ids_and_remote_urls():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import multihost
+    from suitelib.hosts import Host
+    roles = {r: {"host": Host(None), "ssh": f"root@{r}", "addr": f"10.0.0.{i}"} for i, r in enumerate(multihost.ROLES)}
+    st_r = {"nodes": [{"id": 0, "address": addr(1), "api_url": "http://10.0.0.1:3000"}, {"id": 1, "address": addr(2), "api_url": "http://10.0.0.1:3001"}],
+            "extras": [{"id": 0}]}
+    st_e = {"nodes": [{"id": 0, "address": addr(3), "api_url": "http://127.0.0.1:3100/"}]}
+    m = multihost.merge(roles, "-i k", st_r, st_e, 2)
+    assert [(n["id"], n["role"], n["cluster_id"], n["api_url"]) for n in m["nodes"]] == [
+        (0, "relays", 0, "http://10.0.0.1:3000"), (1, "relays", 1, "http://10.0.0.1:3001"), (2, "exits", 0, "http://10.0.0.2:3100")]
+    assert m["blokli_url"] == "http://10.0.0.0:8080" and m["extras"] == [{"id": 0}]

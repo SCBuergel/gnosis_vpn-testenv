@@ -1,0 +1,31 @@
+# Multi-machine testenv (tests/multihost.py). Copy, fill in, then on the clients' machine:
+#   just multihost-check multihost/mine.toml && just multihost-up multihost/mine.toml paired 5 && just multihost-test t33
+# Each role runs where `ssh` says ("local" = the machine running this); `addr` is the address every other machine and
+# the client containers reach it at. Prefer a private network (a cloud VPC): the chain, the nodes' REST APIs and their
+# P2P ports bind to `addr` only, so nothing is published beyond that network. Roles may share a machine.
+
+[ssh]
+# how the clients' machine reaches the others (a dedicated key, see the catalogue's "Multi-machine testenv")
+options = "-i /root/.ssh/multihost_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+[roles.chain]              # Anvil + Blokli in one container
+ssh = "local"
+addr = "10.0.0.10"
+chain_image = "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest"
+
+[roles.relays]             # a hoprd-localcluster of the relay nodes (also mints the clients' identities)
+ssh = "root@10.0.0.11"
+addr = "10.0.0.11"
+hoprd_bin = "/root/relayscale/bin/hoprd-4.1.3-release"
+localcluster_bin = "/root/relayscale/bin/hoprd-localcluster"   # built with patches/hoprd-localcluster-max16.patch
+
+[roles.exits]              # a hoprd-localcluster of the exit nodes, the VPN servers and the traffic target
+ssh = "root@10.0.0.12"
+addr = "10.0.0.12"
+hoprd_bin = "/root/relayscale/bin/hoprd-4.1.3-release"
+localcluster_bin = "/root/relayscale/bin/hoprd-localcluster"
+repo = "/root/relayscale/gnosis_vpn-testenv"                   # this repository, for `just server-start target-start`
+server_image = "gnosis_vpn-server:0.7.0-upstream"
+
+[roles.clients]            # the client containers, their tools sidecars and the suite; always the machine running this
+ssh = "local"
