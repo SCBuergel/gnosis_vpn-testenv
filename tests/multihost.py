@@ -130,7 +130,8 @@ def start_cluster(roles, role, size, extras, token):
         if st.get("state") == "running":
             say(f"{role}: running after {int(time.time() - t0)}s")
             return st
-        if st.get("state") == "failed" or time.time() - t0 > 1200:
+        alive = h.ok(f"pgrep -f '^{lc} .*--data-dir {data}' >/dev/null", timeout=30)
+        if st.get("state") == "failed" or (not alive and time.time() - t0 > 30) or time.time() - t0 > 1200:
             tail = h.out(f"grep -h ERROR {data}/logs/*.log | head -3; tail -3 {data}/logs/localcluster.log")
             raise SystemExit(f"{role}: localcluster {st.get('state') or 'not running'} on {h}:\n{tail}")
         time.sleep(5)
@@ -235,8 +236,15 @@ def up(args):
     cfg.config_dir.mkdir(parents=True, exist_ok=True)
     start_chain(roles)
     token = secrets.token_hex(16)
-    st_r = start_cluster(roles, "relays", n_relays, n, token)
-    st_e = start_cluster(roles, "exits", n_exits, 0, token)
+    # hoprd is ready (/readyz) only with a peer, so a one-node cluster started alone never gets there (T34's single
+    # relay did not): the larger cluster starts first and the smaller one finds its peers on chain. One at a time,
+    # since both fund from the chain's one dev account.
+    if n_relays == 1 and n_exits == 1:
+        raise SystemExit("one relay and one exit: neither cluster can become ready alone; use at least two nodes on one side")
+    order = [("relays", n_relays, n), ("exits", n_exits, 0)]
+    order.sort(key=lambda x: -x[1])
+    st = {role: start_cluster(roles, role, size, extras, token) for role, size, extras in order}
+    st_r, st_e = st["relays"], st["exits"]
     merged = merge(roles, opts, st_r, st_e, n_relays)
     status_file = cfg.config_dir / "multihost.json"
     status_file.write_text(json.dumps(merged, indent=2) + "\n")
