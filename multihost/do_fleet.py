@@ -81,6 +81,32 @@ def api(method, path, body=None, timeout=60):
     raise SystemExit(f"DigitalOcean {method} {path}: gave up after 5 attempts ({last})")
 
 
+PROJECT = "Gnosis VPN test infra"
+
+
+def assign_to_project(project, droplet_ids):
+    """Move droplets into a DigitalOcean project by name (the create call has no project field). Needs the token's
+    project scope; without it this warns and the droplets stay in the account's default project."""
+    if not project or not droplet_ids:
+        return
+    try:
+        ps = api("GET", "/projects?per_page=200")["projects"]
+    except SystemExit as e:
+        print(f"WARNING: cannot read projects ({str(e)[-80:]}); {len(droplet_ids)} droplet(s) stay in the default project. "
+              f"Give the token the project read/update scope to have them in '{project}'.", file=sys.stderr)
+        return
+    match = [x for x in ps if x["name"] == project]
+    if not match:
+        print(f"WARNING: no project named '{project}' (have: {', '.join(x['name'] for x in ps)}); droplets stay where they are",
+              file=sys.stderr)
+        return
+    try:
+        api("POST", f"/projects/{match[0]['id']}/resources", {"resources": [f"do:droplet:{i}" for i in droplet_ids]})
+        print(f"{len(droplet_ids)} droplet(s) in project '{project}'")
+    except SystemExit as e:
+        print(f"WARNING: could not assign droplets to '{project}': {str(e)[-120:]}", file=sys.stderr)
+
+
 def prefix(name):
     return f"gvpn-{name}-"
 
@@ -125,6 +151,7 @@ def create(a):
             body = {"names": full[i:i + 10], "region": a.region, "size": size, "image": image, "ipv6": False,
                     "monitoring": False, "user_data": USER_DATA.format(pubkey=pub)}
             ids += [d["id"] for d in api("POST", "/droplets", body)["droplets"]]
+    assign_to_project(getattr(a, "project", PROJECT), ids)
     state_file(a.name).write_text(json.dumps({"name": a.name, "ids": ids, "region": a.region, "size": a.size,
                                               "created": time.strftime("%FT%TZ", time.gmtime())}, indent=2))
     print(f"created {len(ids)} droplets in {a.region}: " + "; ".join(f"{len(m)} x {s}: {', '.join(m)}" for m, s in groups))
@@ -197,7 +224,7 @@ def bake(a):
     shlex = __import__("shlex")
     name = f"bake-{a.snapshot}"
     b = argparse.Namespace(name=name, clients=0, relays=0, exits=0, region=a.region, size=a.size, image="ubuntu-24-04-x64",
-                           pubkey=a.key + ".pub", add=None)
+                           pubkey=a.key + ".pub", add=None, project=PROJECT)
     create(b)
     try:
         wait(argparse.Namespace(name=name, key=a.key, timeout=1200))
@@ -312,6 +339,14 @@ def destroy(a):
         time.sleep(10)
 
 
+def assign(a):
+    """Move existing droplets (all of them, or those whose name starts with --match) into the project."""
+    ds = api("GET", "/droplets?per_page=200")["droplets"]
+    ids = [d["id"] for d in ds if d["name"].startswith(a.match or "")]
+    print("moving:", ", ".join(d["name"] for d in ds if d["id"] in ids))
+    assign_to_project(a.project, ids)
+
+
 def show(a):
     for d in fleet_droplets(a.name):
         print(d["id"], d["name"], d["status"], d["size_slug"], d["region"]["slug"], *addrs(d))
@@ -337,6 +372,9 @@ def main():
     k.add_argument("--repo-url", default="https://github.com/SCBuergel/gnosis_vpn-testenv.git")
     k.add_argument("--branch", default="multihost")
     sub.add_parser("snapshots", help="list the gvpn- snapshots")
+    g = sub.add_parser("assign", help="move existing droplets into the project")
+    g.add_argument("--project", default=PROJECT)
+    g.add_argument("--match", default="", help="only droplets whose name starts with this")
     for c in ("create", "wait", "hosts", "destroy", "list"):
         p = sub.add_parser(c)
         p.add_argument("--name", required=True, help="fleet name; droplets are gvpn-<name>-<role>-<i>")
@@ -348,6 +386,7 @@ def main():
             p.add_argument("--size", default="g-4vcpu-16gb")
             p.add_argument("--image", default="ubuntu-24-04-x64")
             p.add_argument("--pubkey", default="~/.ssh/do_testenv_fleet_ed25519.pub")
+            p.add_argument("--project", default=PROJECT, help="the DigitalOcean project the droplets go into")
             p.add_argument("--add", action="append", metavar="GROUP:SIZE:COUNT",
                            help="an extra group of droplets with its own size, e.g. relay16:c-16:1 (gvpn-<name>-relay16-1)")
         if c == "hosts":
@@ -358,7 +397,8 @@ def main():
             p.add_argument("--key", default="~/.ssh/do_testenv_fleet_ed25519")
             p.add_argument("--timeout", type=int, default=1200)
     a = ap.parse_args()
-    {"create": create, "wait": wait, "hosts": hosts, "destroy": destroy, "list": show, "bake": bake, "snapshots": snapshots}[a.cmd](a)
+    {"create": create, "wait": wait, "hosts": hosts, "destroy": destroy, "list": show, "bake": bake, "snapshots": snapshots,
+     "assign": assign}[a.cmd](a)
 
 
 if __name__ == "__main__":
