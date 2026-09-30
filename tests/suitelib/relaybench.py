@@ -124,7 +124,7 @@ def overlap(results):
     """The stretch in which every transfer was moving: [last first byte, first last byte]. Returns the window, its
     length, every client's Mbit/s inside it, their mean and minimum, the aggregate, and the spread of the starts. A
     transfer that never moved a byte has no window: then every rate is 0."""
-    starts = [r["start"] for r in results if r.get("start")]
+    starts = [r["start"] for r in results if r.get("start") is not None]
     skew = round(max(starts) - min(starts), 3) if starts else None
     moving = [r for r in results if r.get("first") is not None and r.get("last") is not None]
     base = {"start_skew_s": skew, "slowest_s": round(max((r["last"] - r["start"]) for r in moving), 2) if moving else None}
