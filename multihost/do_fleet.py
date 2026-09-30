@@ -29,6 +29,9 @@ STATE = Path.home() / ".gvpn-fleets"
 READY = "/var/lib/gvpn-ready"
 USER_DATA = """#!/bin/bash
 set -x
+# without an account SSH key DigitalOcean gives root an expiring password, and sshd then demands a password change
+# before any command, key or not: unexpire it first
+chage -d "$(date +%F)" -M 99999 root
 install -d -m 700 /root/.ssh
 echo '{pubkey}' >> /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
@@ -116,11 +119,14 @@ def create(a):
 def wait(a):
     import subprocess
     key = str(Path(a.key).expanduser())
+    want = set(json.loads(state_file(a.name).read_text())["ids"]) if state_file(a.name).exists() else set()
     t0 = time.time()
     while True:
         ds = fleet_droplets(a.name)
-        pending = [d["name"] for d in ds if d["status"] != "active" or not addrs(d)[0]]
-        if not pending:
+        # the listing lags creation: wait for every id created, not for whatever the list shows yet
+        pending = [d["name"] for d in ds if d["status"] != "active" or not addrs(d)[0]] + \
+                  [f"id {i} (not listed yet)" for i in want - {d["id"] for d in ds}]
+        if not pending and ds:
             break
         if time.time() - t0 > a.timeout:
             raise SystemExit(f"not active after {a.timeout}s: {pending}")
