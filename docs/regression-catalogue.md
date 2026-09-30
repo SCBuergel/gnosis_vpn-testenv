@@ -169,6 +169,19 @@ The ladder (`suitelib/relaybench.py`), per rung of `LADDER`="1 2 3 4 5" clients:
 
 `just relay-topology shared 5`: every client through one relay to its own exit (`CLUSTER_SIZE`=6). Read against T33-relay-baseline at the same client count: where it falls below, the single relay is the limit, not the host.
 
+## Multi-machine testenv
+
+`tests/multihost.py` spreads one stack over several machines: the chain (Anvil + Blokli), the relays, the exits (with the VPN servers and the traffic target) and the clients (their containers and the suite) each on a machine of its own, or any of them sharing one. A hosts file names each role's machine (`ssh`), the address the others reach it at (`addr`, preferably a private network: the chain, the nodes' REST and P2P ports bind to it and nothing else) and its binaries; `multihost/hosts.example.toml` is the template. Run it on the clients' machine, which needs ssh to the others (a dedicated key).
+
+```sh
+just multihost-check HOSTS                 # every machine: reachable, binaries with checksums, images, repo
+just multihost-up HOSTS paired 5           # T33-relay-baseline's topology; `shared 5` for T34, `standard 5` for T22
+just multihost-test t33                    # the test against it (CONFIG_DIR/multihost.env)
+just multihost-down HOSTS
+```
+
+How it comes up: the chain container starts on its machine; the relays' and the exits' machines each run a `hoprd-localcluster` with `--chain-url` at that chain, `--p2p-host`/`--api-host` their `addr` and `--channel-management none`, one after the other because both fund from the chain's one dev account. Each localcluster pre-announces its nodes right after their Safes (the window Blokli re-indexes), so every node reaches every other. The relays' cluster also mints the clients' identities. The merged status (relays node-0.., exits after them, each with its REST URL, `ssh` target and role) is written to `CONFIG_DIR/multihost.json` and read by the suite through `MULTIHOST_STATUS`; the target is reached through `TARGET_HOST`. `paired` and `shared` build the relay-scaling topology as `just relay-topology` does; `standard` is T22-concurrent-clients' stack, two relays and one exit in a full mesh with the clients on their own strategy. T33 and T34 then report CPU per machine (sampled on that machine over ssh) instead of one host figure.
+
 ## The runbook
 
 | Entry | Does | Runs when |
