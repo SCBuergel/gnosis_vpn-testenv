@@ -115,7 +115,9 @@ def start_cluster(roles, role, size, extras, token):
     args = (f"--hoprd-bin {r['hoprd_bin']} --chain-url {chain_url(roles)} --size {size} --p2p-host {r['addr']} "
             f"--p2p-port-base {p2p} --api-host {r['addr']} --api-port-base {api} --api-token {token} --data-dir {data} "
             f"--channel-management none --funding-amount '1 wxHOPR' --extra-identities {extras}")
-    h.run(f"rm -rf {data} && mkdir -p {data}/logs && cd /tmp && setsid nohup env RUST_LOG=info {lc} {args} "
+    # the background job alone redirected, not an `a && b && c &` list: a backgrounded list keeps the ssh session's
+    # stdout open and the call returned only at its timeout
+    h.run(f"rm -rf {data}; mkdir -p {data}/logs; cd /tmp; setsid nohup env RUST_LOG=info {lc} {args} "
           f"> {data}/logs/localcluster.log 2>&1 < /dev/null & echo started", timeout=60)
     say(f"{role}: localcluster of {size} node(s) on {h} (p2p {r['addr']}:{p2p}+, api :{api}+)")
     t0 = time.time()
