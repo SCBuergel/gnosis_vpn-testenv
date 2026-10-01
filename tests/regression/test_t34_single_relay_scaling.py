@@ -8,13 +8,16 @@ docstring). T33-relay-baseline runs the ladder with a relay and an exit per clie
 Procedure (suitelib/relaybench.py): the channel graph is held against the topology before every rung (every client
 and every exit exactly one Open channel, to the one relay); IDLE_S=10 after connecting (below the suite's
 SURB_RAMP_WAIT floor on purpose, by request); every transfer of a phase starts at one common second (START_LEAD_S=5
-after it is handed out; the start skew is reported); PAUSE_S=10 between download, upload and rungs. FAIL only when a
-transfer does not complete within CAP=300 s (100 MB in 300 s is 2.67 Mbit/s). The rates are recorded, not scored, over
-the overlap: the window in which every client was transferring, from the last first byte to the first last byte.
-Reported per rung: the relay's machine CPU (% of all its cores) and its hoprd process's CPU (% of one core), the other
-roles' machines, the hoprd and client versions and one line of machine specs per role. The relay must have forwarded
-at least one packet per PKT_BYTES_MAX downloaded bytes (the share check of T33 is 100 % by construction here and only
-recorded).
+after it is handed out); PAUSE_S=10 between download, upload and rungs. FAIL when a transfer does not complete within
+CAP=300 s (100 MB in 300 s is 2.67 Mbit/s), when a complete transfer's bytes are not on its client's tunnel interface
+counters, when the relay forwarded less than one packet per PKT_BYTES_MAX transferred bytes in either phase (the share
+check of T33 is 100 % by construction here and only recorded), or (relay on its own machine) when the relay machine's
+wire carried less than the transferred bytes in or out. The rates are recorded, not scored, over the overlap: the
+window in which every client was transferring, from the last first byte to the first last byte; upload bytes count
+when the target's TCP acknowledged them. Reported per rung: the relay's machine CPU (% of all its cores) and its hoprd
+process's CPU (% of one core) over the overlap window, the aggregate per BUCKET_S=5 s (min / median / max), the
+longest stall, the frames the clients discarded, the relay machine's UDP errors and wire bytes, the relay's own packet
+counters, the other roles' machines, the hoprd and client versions and one line of machine specs per role.
 
 Setup: `just relay-topology shared N` on one machine, or `just multihost-up HOSTS shared N` across machines, then
 `just test t34` / `just multihost-test t34`. SKIP on any other stack."""

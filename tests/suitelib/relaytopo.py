@@ -1,4 +1,4 @@
-"""Relay-scaling topologies for T33-relay-baseline and T34-single-relay-scaling.
+"""Relay-scaling topologies for T33-relay-baseline, T34-single-relay-scaling and T35-single-exit-scaling.
 
 A topology pins every client to one relay and one exit through the channel graph alone. The client config has
 no fixed intermediates (v6 takes only a hop count), so at one hop the path is decided by the channels:
@@ -16,11 +16,15 @@ Two layouts on one localcluster started with `--channel-management none`:
 - shared N (T34-single-relay-scaling): node 0 is the only relay, exits are 1..N; client k uses exit k.
 - single-exit N (T35-single-exit-scaling): relays are nodes 0..N-1, node N is the only exit; client k uses relay k-1.
   The exit holds one channel to every relay, so a client's forward path is pinned to its relay but its return paths
-  come back over all of them (measured: each relay carried about 1/N of the return traffic, also with one client).
+  (the client builds them, among the relays the exit has a channel to) come back over all of them (measured: each
+  relay carried about 1/N of the return traffic, also with one client).
 
-Client k also has its own VPN server (gnosis_vpn-server-{k-1}, bridge 8000+k-1, WireGuard 51821+k-1), so N exits
-means N hoprd exit nodes with N servers behind them; one traffic target serves all. The layout is written to
-CONFIG_DIR/relay-topology.json by tests/relay_topology.py and read back by the tests."""
+In paired and shared, client k has its own VPN server (gnosis_vpn-server-{k-1}, bridge 8000+k-1, WireGuard
+51821+k-1), so N exits means N hoprd exit nodes with N servers behind them. In single-exit every client uses the one
+server behind the one exit (gnosis_vpn-server-0), as on a production exit: the first version started a server per
+client on the exit's machine, so ten WireGuard servers shared the work one does in the field and the test could not
+see a limit in it. One traffic target serves all. The layout is written to CONFIG_DIR/relay-topology.json by
+tests/relay_topology.py and read back by the tests."""
 import json
 import string
 from pathlib import Path
@@ -34,8 +38,10 @@ def client_name(k, base="gnosis_vpn-client"):
     return base if k == 1 else f"{base}-{k}"
 
 
-def layout(mode, n):
-    """Node indices per role and the client -> (relay, exit, server) assignment, before any address is known."""
+def layout(mode, n, server_per_client=False):
+    """Node indices per role and the client -> (relay, exit, server) assignment, before any address is known.
+    server_per_client: single-exit as the 2026-09-30 run had it, a VPN server per client behind the one exit (kept to
+    tell that run's numbers from a one-server run's; not the shape of a production exit)."""
     if mode not in MODES:
         raise ValueError(f"mode {mode!r}: one of {', '.join(MODES)}")
     n = int(n)
@@ -50,10 +56,14 @@ def layout(mode, n):
     else:
         relays, exits = [0], list(range(1, n + 1))
         pick_relay = lambda k: 0                       # noqa: E731
+    # a VPN server per exit node: one per client in paired and shared, one for everybody in single-exit
+    server_of = {x: i for i, x in enumerate(sorted(set(exits)))}
     clients = [{"k": k, "name": client_name(k), "extra": k - 1, "relay": pick_relay(k), "exit": exits[k - 1],
-                "server": k - 1, "dest": f"node-{exits[k - 1]}", "config": f"client-{k}.toml"} for k in range(1, n + 1)]
+                "server": k - 1 if server_per_client else server_of[exits[k - 1]], "dest": f"node-{exits[k - 1]}",
+                "config": f"client-{k}.toml"} for k in range(1, n + 1)]
     exits = sorted(set(exits))
-    return {"mode": mode, "n": n, "cluster_size": len(relays) + len(exits), "relays": relays, "exits": exits, "clients": clients}
+    return {"mode": mode, "n": n, "cluster_size": len(relays) + len(exits), "relays": relays, "exits": exits,
+            "servers": n if server_per_client else len(exits), "clients": clients}
 
 
 def with_addresses(lay, status):

@@ -6,7 +6,7 @@
     just relay-topology-check        # hold the live channel graph against CONFIG_DIR/relay-topology.json
 
 `up` takes the whole stack down first (like `just down`), starts a localcluster with `--channel-management none`
-and one pre-funded identity per client, one VPN server per client, the traffic target, then opens each exit's one
+and one pre-funded identity per client, one VPN server per exit, the traffic target, then opens each exit's one
 channel (to its relay) through the exit's REST API, starts the clients with their own config (client-<k>.toml: one
 destination, own server ports, a strategy that opens one channel to the assigned relay), and waits until the chain
 shows exactly the topology. The layout and the addresses land in CONFIG_DIR/relay-topology.json. See
@@ -68,10 +68,10 @@ def open_exit_channels(cluster, topo, amount, timeout):
 
 
 def up(args):
-    lay = relaytopo.layout(args.mode, args.n)
+    lay = relaytopo.layout(args.mode, args.n, server_per_client=args.server_per_client)
     env = dict(os.environ)
     env.update(CLUSTER_SIZE=str(lay["cluster_size"]), CLUSTER_CHANNEL_MANAGEMENT="none", EXTRA_IDENTITIES=str(lay["n"]),
-               CLIENT_COUNT=str(lay["n"]), SERVER_COUNT=str(lay["n"]))
+               CLIENT_COUNT=str(lay["n"]), SERVER_COUNT=str(lay["servers"]))
     down_env = dict(env, SERVER_COUNT=str(max(8, lay["n"])))      # whatever ran before, its servers go too
     just(down_env, "down", timeout=600)
     try:
@@ -141,6 +141,7 @@ def main():
     u.add_argument("--funding", default=os.environ.get("RELAY_TOPO_FUNDING", "1 wxHOPR"),
                    help="stake of each exit's channel to its relay (default 1 wxHOPR, the localcluster's per-channel funding)")
     u.add_argument("--timeout", type=int, default=900, help="seconds to wait for the channels")
+    u.add_argument("--server-per-client", action="store_true", help="single-exit: a VPN server per client, as the 2026-09-30 run had it")
     sub.add_parser("check", help="hold the live channel graph against the saved topology")
     args = ap.parse_args()
     (up if args.cmd == "up" else check)(args)

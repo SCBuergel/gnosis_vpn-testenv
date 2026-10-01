@@ -90,7 +90,7 @@ stall is intermittent, so re-run once before removing the tag.
 | `LOG_MB_MIN_MAX`                      | 200 MB/min   | T23-sustained-soak client log growth                                                                                       | 63-70 MB/min at path-planner debug                                                                                                         | the incident was 1.6 GB/min                                                                                   |
 | `CAP` (T33; T34, T35)                 | 180 s; 300 s | every transfer of a rung (25 MB in T33, 100 MB in T34 and T35)                                                             | not calibrated yet (first run 2026-09-29)                                                                                                  | 25 MB in 180 s is 1.1 Mbit/s; a completion bound, not a rate threshold, until the ladder is calibrated        |
 | `ATTRIB_MIN_PCT`                      | 90 %         | T33-relay-baseline: share of forwarded packets on the rung's relays (not scored with one relay)                            | 99.9-100 % (rs2, 2026-09-29)                                                                                                               | the topology leaves no other route; the margin is for probe traffic                                           |
-| `PKT_BYTES_MAX`                       | 1000 B       | T33-relay-baseline, T34-single-relay-scaling: floor of forwarded packets = downloaded bytes / this                         | 2.2-2.4 packets per 1000 B (rs2)                                                                                                           | above a HOPR packet's payload, so it holds on any healthy stack and fails a download that bypassed the relays |
+| `PKT_BYTES_MAX`                       | 1000 B       | T33 to T35: floor of forwarded packets = transferred bytes / this, per phase                                               | 2.2-2.4 packets per 1000 B (rs2)                                                                                                           | above a HOPR packet's payload, so it holds on any healthy stack and fails a download that bypassed the relays |
 
 ## The run
 
@@ -310,8 +310,8 @@ UNMEASURED FAIL. Deadman covered.
 Two gates that measure relays, not the client: each runs on a topology
 `just relay-topology MODE N` builds (it takes the stack down first) and SKIPs on
 any other stack, so in the one run they cost nothing. `tests/relay_topology.py`
-starts a localcluster with `--channel-management none`, one pre-funded identity,
-one VPN server and one config file per client, and pins every path through the
+starts a localcluster with `--channel-management none`, one pre-funded identity
+and one config file per client, one VPN server per exit node, and pins every path through the
 channel graph: each client's strategy opens exactly one channel, to its relay
 (`[strategy]` `min_open_channels`=`target_open_channels`=1 and a one-peer
 `channel_allowlist`), and each exit gets exactly one channel, to the same relay,
@@ -345,19 +345,35 @@ it is the whole transfer. (Earlier runs reported a "wall-clock aggregate", all
 bytes / time to the last finish, which counts the tail after the first clients
 finished; the overlap does not.)
 
-A rung PASSes iff every transfer completes within `CAP`, and iff the relays
-forwarded at least one packet per `PKT_BYTES_MAX`=1000 downloaded bytes during
-the download (`RELAY_METRIC`=`hopr_packets_count{type="forwarded"}`; a HOPR
-packet carries less, so a download that bypassed the relays fails), and, where
-each return path is pinned to its client's relay and there is more than one
-relay (T33), iff at least `ATTRIB_MIN_PCT`=90 % of all forwarded packets went
-through the rung's own relays. Rates are recorded, not scored, until calibrated.
-Each run records the hoprd version (REST `/node/version` of a relay and of an
-exit), the client version and image, and one line of machine specs per role, and
-leads its report with the node under test: its machine's CPU (% of all cores)
-and its hoprd process's CPU (% of one core), from the common start to the last
-finish; the other roles' machines are recorded too. Each run writes `<TEST>.md`,
-one line per rung.
+Upload bytes count when the target's TCP acknowledged them (the probe subtracts
+the socket's send queue, `SIOCOUTQ`), not when they were handed to the socket:
+the first version counted the latter and its upload rates ran ahead of the wire
+by the send buffer. A mean hides a path that collapses and recovers, so each
+phase also reports the aggregate per `BUCKET_S`=5 s inside the overlap (min /
+median / max) and the longest stretch without progress of any transfer.
+
+A rung PASSes iff every transfer completes within `CAP`, and the evidence of
+its path holds: every complete transfer's bytes are on its client's tunnel
+interface counters (the probe binds to the interface and reads its rx/tx
+around the transfer); the relays forwarded at least one packet per
+`PKT_BYTES_MAX`=1000 transferred bytes during the download and during the upload
+(`RELAY_METRIC`=`hopr_packets_count{type="forwarded"}`; a HOPR packet carries
+less, so a transfer that bypassed the relays fails); where each return path is
+pinned to its client's relay and there is more than one relay (T33), at least
+`ATTRIB_MIN_PCT`=90 % of all forwarded packets went through the rung's own
+relays; and, where the node under test has machines of its own (multi-machine),
+their wire interfaces carried at least the transferred bytes in the direction
+of the transfer. Rates are recorded, not scored, until calibrated. Each run
+records the hoprd version (REST `/node/version` of a relay and of an exit), the
+client version and image, one line of machine specs per role and how far any
+machine's clock can be from the runner's (the probes start on their own clocks,
+so "start skew 0" only says no probe started late), and leads its report with
+the node under test: its machine's CPU (% of all cores) and its hoprd process's
+CPU (% of one core), sampled every `SAMPLE_S`=2 s on the machine and cut to the
+same overlap window as the rates; its machine's UDP error counters (a socket
+buffer that overflows drops packets while the CPU looks idle); its hoprd's own
+packet counters; the frames the clients discarded. The other roles' machines
+are recorded too. Each run writes `<TEST>.md`, one line per rung.
 
 ### T33-relay-baseline · **gate** · relayscale
 
@@ -378,16 +394,23 @@ one-to-one, see T35).
 `just multihost-up HOSTS single-exit N` (or
 `just relay-topology single-exit N`): one exit for every client; client k holds
 one channel, to relay k, and the exit one channel to each relay. So each
-client's forward path (its upload) is pinned to its own relay, but the exit
-spreads every client's return traffic (its download) over all the relays: in the
+client's forward path (its upload) is pinned to its own relay, but its return
+paths (its download) run over all the relays the exit has a channel to: in the
 2026-09-30 run each of ten relays carried 9-10 % of it at every rung, also with
 one client. T35 therefore measures one exit behind a pool of relays, not a relay
 per client, and does not read one-to-one against T34-single-relay-scaling;
 pinning the return path would need a fresh stack per rung.
-`DOWN_BYTES`=`UP_BYTES`=100000000, `CAP`=300 s. Under test: the exit (its
-machine also runs a VPN server per client and the traffic target); if its
-machine is far from saturated, the top rung is a lower bound on one exit's
-capacity. T22-concurrent-clients keeps its standard stack.
+`DOWN_BYTES`=`UP_BYTES`=100000000, `CAP`=300 s. Under test: the exit, which is
+one hoprd exit node and its one VPN server, as in the field (its machine also
+runs the traffic target; the first version ran a VPN server per client there).
+Each client tops out by itself, so the aggregate is what the exit carried, not
+what it can carry. Signs of the exit's limit: the per-client rate falls, the
+buckets spread, the exit machine's UDP errors start to move during the uploads
+(on downloads they move at every rung, also with one client), the exit process
+stops gaining CPU. Machine CPU alone does not tell (a hoprd node levels off
+near 60 % of its machine), and the relay machines must be read first: at that
+same level the top rungs do not tell the exit from the relay pool.
+T22-concurrent-clients keeps its standard stack.
 
 ## Multi-machine testenv
 

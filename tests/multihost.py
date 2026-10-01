@@ -21,7 +21,7 @@ and `--channel-management none`; the nodes of a role are spread over its machine
 other, each once the one before has spawned its nodes: they fund from the chain's one dev account (so never at the
 same time), and a node is ready (/readyz) only with a peer (so none may wait for readiness alone). Each localcluster
 pre-announces its nodes right after their Safes, so every node reaches every other through Blokli. The first relay
-cluster also mints the clients' identities. Each exit machine runs the VPN servers of the clients whose exit it holds
+cluster also mints the clients' identities. Each exit machine runs the VPN server of every exit node it holds
 and a traffic target (the same address on each, 198.18.0.2). The merged status (every node with a global id: relays
 0.., exits after them; every client with its machine) lands in CONFIG_DIR/multihost.json; the clients start on their
 machines; the topology's channels are opened:
@@ -134,9 +134,9 @@ def spread(size, machines):
     return out
 
 
-def layout(mode, n):
+def layout(mode, n, server_per_client=False):
     if mode in relaytopo.MODES:
-        return relaytopo.layout(mode, n)
+        return relaytopo.layout(mode, n, server_per_client=server_per_client)
     # standard: T22-concurrent-clients' stack, two relays and one exit in a full mesh, n clients on their own strategy
     return {"mode": "standard", "n": int(n), "cluster_size": 3, "relays": [0, 1], "exits": [2], "clients": []}
 
@@ -384,7 +384,7 @@ def down(args, opts=None, roles=None):
 
 def up(args):
     opts, roles = load_hosts(args.hosts)
-    lay = layout(args.mode, args.n)
+    lay = layout(args.mode, args.n, args.server_per_client)
     n_relays, n_exits, n = len(lay["relays"]), len(lay["exits"]), lay["n"]
     down(args, opts, roles)
     write_ssh_config(opts, roles)
@@ -396,18 +396,22 @@ def up(args):
     (cfg.config_dir / "blokli_url").write_text(merged["blokli_url"] + "\n")
     fetch_extras(opts, merged, cfg)
     machine_of = {nd["id"]: nd["machine"] for nd in merged["nodes"]}
-    # the VPN servers: in the relay topologies one per client on its exit's machine, numbered per machine; in standard
-    # one server every client shares
+    # the VPN servers: in the relay topologies one per exit node on that exit's machine, numbered per machine (so one
+    # per client in paired and shared, one for everybody in single-exit); in standard one server every client shares
     topo = None
     if args.mode == "standard":
         servers = {machine_of[lay["exits"][0]]: 1}
     else:
         topo = relaytopo.with_addresses(lay, merged)
-        servers = {}
+        servers, slot = {}, {}
         for c in topo["clients"]:
             mname = machine_of[c["exit"]]
-            c["server"] = servers.get(mname, 0)
-            servers[mname] = c["server"] + 1
+            key = (c["exit"], c["server"])                     # the layout's server: shared per exit, or one per client
+            if key not in slot:
+                slot[key] = servers.get(mname, 0)
+                servers[mname] = slot[key] + 1
+            c["server"] = slot[key]
+        topo["servers"] = sum(servers.values())
     target_ip = exit_services(roles, servers)
     for k in range(1, n + 1):
         m = client_machine(roles, k)
@@ -551,6 +555,7 @@ def main():
     u.add_argument("n", type=int)
     u.add_argument("--funding", default=os.environ.get("RELAY_TOPO_FUNDING", "1 wxHOPR"))
     u.add_argument("--timeout", type=int, default=900)
+    u.add_argument("--server-per-client", action="store_true", help="single-exit: a VPN server per client, as the 2026-09-30 run had it")
     sub.add_parser("down", help="stop everything on every machine")
     sub.add_parser("check", help="what each machine has")
     p = sub.add_parser("provision", help="copy what the machines are missing from this one")

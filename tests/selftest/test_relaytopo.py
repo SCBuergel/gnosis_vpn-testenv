@@ -193,6 +193,14 @@ def test_multihost_need_reads_only_its_role():
 def test_single_exit_layout_and_channels():
     lay = relaytopo.layout("single-exit", 3)
     assert lay["relays"] == [0, 1, 2] and lay["exits"] == [3] and lay["cluster_size"] == 4
+    # one exit, one VPN server: every client's config points at server 0 (a server per client hid the server's share)
+    assert lay["servers"] == 1 and {c["server"] for c in lay["clients"]} == {0}
+    assert relaytopo.layout("paired", 3)["servers"] == 3 and relaytopo.layout("shared", 3)["servers"] == 3
+    assert [c["server"] for c in relaytopo.layout("shared", 3)["clients"]] == [0, 1, 2]
+    old = relaytopo.layout("single-exit", 3, server_per_client=True)
+    assert old["servers"] == 3 and [c["server"] for c in old["clients"]] == [0, 1, 2]
+    cfg = tomllib.loads(relaytopo.render_client_config(TEMPLATES, relaytopo.with_addresses(lay, status(4, 3))["clients"][2]))
+    assert cfg["connection"]["bridge"]["target"] == "127.0.0.1:8000" and cfg["connection"]["wg"]["target"] == "127.0.0.1:51821"
     assert [(c["relay"], c["exit"], c["dest"]) for c in lay["clients"]] == [(0, 3, "node-3"), (1, 3, "node-3"), (2, 3, "node-3")]
     topo = relaytopo.with_addresses(lay, status(4, 3))
     ok = [ch(c["address"], c["relay_address"]) for c in topo["clients"]] + [ch(addr(3), addr(r)) for r in (0, 1, 2)]
@@ -215,7 +223,99 @@ def test_overlap_rates_use_the_window_all_transfers_share():
     single = overlap([a])
     assert single["agg_mbit"] == 80.0 and single["window_s"] == 10.0
     dead = overlap([a, {"start": 0.1, "first": None, "last": None, "samples": []}])
-    assert dead["agg_mbit"] == 0 and dead["window"] is None
+    assert dead["agg_mbit"] == 0 and dead["window"] is None and dead["buckets"] == []
+
+
+def test_buckets_and_stalls_show_what_the_mean_hides():
+    from suitelib.relaybench import bucket_rates, longest_stall, overlap
+    # 10 MB/s for 10 s, nothing for 10 s, 10 MB/s for 10 s: the mean says 53 Mbit/s, the buckets say 80 / 0 / 80
+    r = {"start": 0.0, "first": 0.0, "last": 30.0,
+         "samples": [[0.0, 0], [10.0, 100_000_000], [20.0, 100_000_000], [20.5, 105_000_000], [30.0, 200_000_000]]}
+    assert bucket_rates([r], 0.0, 30.0, 10) == [80.0, 0.0, 80.0]
+    assert bucket_rates([r], 0.0, 25.0, 10) == [80.0, 0.0]            # the partial last bucket is dropped
+    assert bucket_rates([r], 0.0, 4.0, 10) == [80.0]                  # a window shorter than a bucket is one bucket
+    assert longest_stall(r) == 10.5                                   # from the last byte before the gap to the first after it
+    assert longest_stall({"first": None, "samples": []}) is None
+    o = overlap([r], bucket_s=10)
+    assert o["agg_mbit"] == 53.333 and (o["bucket_min"], o["bucket_median"], o["bucket_max"]) == (0.0, 80.0, 80.0) and o["stall_max_s"] == 10.5
+
+
+def test_tunnel_shortfall_needs_the_bytes_on_the_interface():
+    from suitelib.relaybench import tunnel_shortfall
+    ok = {"dir": "down", "bytes": 1000, "tunnel": {"iface": "wg0", "rx": 1100, "tx": 40, "recreated": False}}
+    assert tunnel_shortfall(ok) is None
+    assert tunnel_shortfall(dict(ok, dir="up")).startswith("only 40 B crossed wg0")         # an upload is held against tx
+    assert "no tunnel interface" in tunnel_shortfall({"dir": "down", "bytes": 1000, "tunnel": None})
+    assert "recreated" in tunnel_shortfall({"dir": "down", "bytes": 1, "tunnel": {"iface": "wg0", "rx": None, "tx": None, "recreated": True}})
+
+
+SAMPLER_LINES = """K 100
+T 100.0
+C cpu  100 0 100 800 0 0 0 0 0 0
+P 42 42 (hoprd x) S 1 2 3 4 5 6 7 8 9 10 250 50 0 0
+N Inter-|   Receive                                                |  Transmit
+N  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+N     lo: 5 1 0 0 0 0 0 0 5 1 0 0 0 0 0 0
+N   eth1: 1000 1 0 0 0 0 0 0 2000 1 0 0 0 0 0 0
+N veth9a: 7 1 0 0 0 0 0 0 7 1 0 0 0 0 0 0
+U Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
+U Udp: 10 0 1 10 1 0 0 0 0
+E
+T 110.0
+C cpu  500 0 100 1400 0 0 0 0 0 0
+P 42 42 (hoprd x) S 1 2 3 4 5 6 7 8 9 10 1250 50 0 0
+N     lo: 9 1 0 0 0 0 0 0 9 1 0 0 0 0 0 0
+N   eth1: 11000 1 0 0 0 0 0 0 42000 1 0 0 0 0 0 0
+U Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors
+U Udp: 90 0 7 90 7 0 0 0 0
+E
+T 120.0
+C cpu  500 0""".splitlines()
+
+
+def test_machine_samples_and_window():
+    from suitelib.hosts import machine_window, parse_machine_samples, wire_bytes
+    smp = parse_machine_samples(SAMPLER_LINES)
+    assert [x["t"] for x in smp] == [100.0, 110.0]                   # the sample cut short at the end is dropped
+    assert (smp[0]["busy"], smp[0]["total"]) == (200, 1000) and smp[0]["pid"] == {42: 3.0}
+    assert wire_bytes(smp[0]) == (1000, 2000)                        # lo and veth are not the wire
+    w = machine_window(smp, 100.0, 110.0, [42, 43])
+    # 400 of 1000 jiffies busy; the process 10 cpu-seconds in 10 s; 10 kB in and 40 kB out; six receive-buffer drops
+    assert w["cpu_pct"] == 40.0 and w["pid_pct"] == {42: 100.0, 43: None} and (w["wire_rx"], w["wire_tx"]) == (10000, 40000)
+    assert w["udp_errors"] == {"InErrors": 6, "RcvbufErrors": 6, "SndbufErrors": 0, "MemErrors": 0} and w["covered_s"] == 10.0
+    half = machine_window(smp, 105.0, 200.0, [42])                   # clipped to what the samples cover, interpolated
+    assert half["covered_s"] == 5.0 and half["cpu_pct"] == 40.0 and half["wire_tx"] == 20000
+    assert machine_window(smp[:1], 0, 1e12)["cpu_pct"] is None and machine_window(smp, 300, 400)["covered_s"] == 0.0
+
+
+def test_sampler_runs_the_loop_on_this_machine_and_leaves_nothing_behind():
+    import os
+    import subprocess
+    import time
+    from suitelib.hosts import Host, Sampler
+    smp = Sampler(Host(None), [os.getpid(), 0], interval=0.2, max_s=30).start()
+    assert smp.wait_first(10)
+    time.sleep(0.6)
+    got = smp.stop()
+    assert len(got) >= 2 and got[0]["total"] and os.getpid() in got[0]["pid"] and "lo" in got[0]["net"]
+    assert got[-1]["t"] > got[0]["t"] and abs(got[0]["t"] - time.time()) < 60
+    time.sleep(0.5)
+    assert subprocess.run(["pgrep", "-f", "printf 'K %s"], capture_output=True).returncode == 1      # the loop died with its reader
+
+
+def test_window_summarises_machines_per_role():
+    from suitelib.hosts import Host, parse_machine_samples
+    from suitelib.relaybench import MachineWatch, counts_delta
+    groups = {"root@e1": (Host(None), "exits", {"node-2": 42}), "root@c1": (Host(None), "clients", {})}
+    watch = MachineWatch(groups, 1, 30)
+    watch.samplers["root@e1"].samples = parse_machine_samples(SAMPLER_LINES)
+    w = watch.window(100.0, 110.0)
+    assert w.host_pct == {"exits": 40.0} and w.node_pct == {"node-2": 100.0} and w.machine_pct == {"root@e1": 40.0, "root@c1": None}
+    assert w.wire == {"exits": (10000, 40000)} and w.udp["exits"]["RcvbufErrors"] == 6 and w.covered_s == 0.0
+    whole = watch.window()
+    assert whole.wire == {"exits": (10000, 40000)}
+    d = counts_delta({3: {"sent": 10, "received": None}}, {3: {"sent": 25, "received": 4}})
+    assert d == {3: {"sent": 15, "received": None}}
 
 
 def test_transferprobe_download_and_upload_against_the_target():
@@ -235,7 +335,14 @@ def test_transferprobe_download_and_upload_against_the_target():
                                 "--dir", d, "--bytes", "3000000", "--tick", "0.01"], capture_output=True, text=True, timeout=60)
             out = json.loads(r.stdout)
             assert out["complete"] and out["bytes"] == 3000000 and out["code"] == 200, out
-            assert out["samples"][-1][1] == 3000000 and out["first"] <= out["last"]
+            assert out["samples"][-1][1] == 3000000 and out["first"] <= out["last"] <= out["done"]
+            # an upload's log counts what the target's TCP acknowledged, not what was handed to the socket
+            assert out["counted"] == ("read" if d == "down" else "acked") and out["acked"] == (None if d == "down" else 3000000)
+            assert out["tunnel"] is None
+        r = subprocess.run([sys.executable, str(tests / "probes" / "transferprobe.py"), "--host", "127.0.0.1", "--port", str(port),
+                            "--dir", "down", "--bytes", "3000000", "--iface", "lo"], capture_output=True, text=True, timeout=60)
+        t = json.loads(r.stdout)["tunnel"]
+        assert t["iface"] == "lo" and t["rx"] >= 3000000 and t["tx"] >= 3000000 and not t["recreated"], t
     finally:
         srv.shutdown()
 
