@@ -75,7 +75,7 @@ def api(method, path, body=None, timeout=60):
                 time.sleep(5 * (attempt + 1))
                 continue
             raise SystemExit(f"DigitalOcean {method} {path}: HTTP {e.code} {msg}")
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, TimeoutError, OSError) as e:     # a read timeout is no URLError
             time.sleep(5 * (attempt + 1))
             last = e
     raise SystemExit(f"DigitalOcean {method} {path}: gave up after 5 attempts ({last})")

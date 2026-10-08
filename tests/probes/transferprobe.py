@@ -29,19 +29,61 @@ leave by another route, and the interface's own rx/tx byte counters around the t
 a complete transfer must have moved at least its bytes through that interface.
 
 `complete` needs every byte and a 200 (for an upload, the target's own count must match too). The transfer stops at
---timeout seconds after its start, complete or not."""
+--timeout seconds after its start, complete or not.
+
+--ping HOST runs `ping -D -O -i PING_INTERVAL` (bound to --iface when given) from the transfer's start to its end, so
+the round-trip time under load comes with the byte log: `pings` is [[icmp_seq, epoch sent, rtt ms or null], ...], one
+entry per echo sent (null: no reply before the transfer ended). An answered echo's send time is its reply's stamp
+minus its rtt; an unanswered one's is extrapolated from the ping's start at the interval."""
 import argparse
 import fcntl
 import http.client
 import json
+import re
 import select
+import signal
 import socket
 import struct
+import subprocess
 import sys
 import termios
 import time
 
 CHUNK = 65536
+PING_REPLY = re.compile(r"^\[(\d+\.\d+)\].*icmp_seq=(\d+).*time=([\d.]+) ms")
+PING_SENT = re.compile(r"(\d+) packets transmitted")
+
+
+def ping_start(a):
+    if not a.ping:
+        return None
+    argv = ["ping", "-n", "-D", "-O", "-i", str(a.ping_interval)] + (["-I", a.iface] if a.iface else []) + [a.ping]
+    try:
+        return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True), time.time()
+    except OSError:
+        return None
+
+
+def ping_stop(p, interval):
+    """[[seq, epoch sent, rtt ms or None], ...] for every echo the ping sent."""
+    if p is None:
+        return None
+    proc, t0 = p
+    proc.send_signal(signal.SIGINT)
+    try:
+        text = proc.communicate(timeout=10)[0]
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        text = proc.communicate()[0]
+    got = {}
+    for line in text.splitlines():
+        m = PING_REPLY.match(line)
+        if m:
+            got[int(m.group(2))] = (float(m.group(1)) - float(m.group(3)) / 1000, float(m.group(3)))
+    m = PING_SENT.search(text)
+    sent = max([int(m.group(1)) if m else 0] + list(got))
+    return [[seq, round(got[seq][0] if seq in got else t0 + (seq - 1) * interval, 3), got[seq][1] if seq in got else None]
+            for seq in range(1, sent + 1)]
 
 
 def iface_bytes(iface):
@@ -81,6 +123,7 @@ def run(a):
     delay = a.start_at - time.time()
     if delay > 0:
         time.sleep(delay)
+    pinger = ping_start(a)
     t0 = time.time()
     out["start"] = t0
     deadline = t0 + a.timeout
@@ -169,6 +212,8 @@ def run(a):
         elif sk is not None:
             sk.close()
     out["bytes"] = total
+    if a.ping:
+        out["pings"] = ping_stop(pinger, a.ping_interval)
     if out["last"] is not None:
         note(out["last"], force=True)
     if a.iface:
@@ -190,6 +235,8 @@ def main():
     ap.add_argument("--timeout", type=float, default=300.0)
     ap.add_argument("--tick", type=float, default=0.25)
     ap.add_argument("--iface", default="", help="the tunnel interface: bind to it and report its byte counters")
+    ap.add_argument("--ping", default="", help="ping this host for the length of the transfer (see above)")
+    ap.add_argument("--ping-interval", type=float, default=1.0)
     json.dump(run(ap.parse_args()), sys.stdout)
 
 

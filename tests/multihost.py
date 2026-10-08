@@ -33,6 +33,7 @@ CONFIG_DIR/multihost.env holds what the suite needs: MULTIHOST_STATUS, MULTIHOST
 CLUSTER_SIZE. The suite reaches a remote client's docker as ssh://<its ssh target> (a block in ~/.ssh/config on the
 runner, written here, gives docker the key and a shared connection)."""
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -62,6 +63,7 @@ DATA = {"relays": "/tmp/hopr-mh-relays", "exits": "/tmp/hopr-mh-exits"}
 CHAIN_NAME = "hopr-chain"
 MODES = ("paired", "shared", "single-exit", "standard")
 REMOTE_CONFIG_DIR = "/tmp/gnosis_vpn-testenv"
+FUND_LOCK = "/tmp/gnosis_vpn-testenv-funding.lock"   # one localcluster funding from the chain's dev account at a time
 SSH_BLOCK = ("# >>> gnosis_vpn-testenv multihost (written by tests/multihost.py)", "# <<< gnosis_vpn-testenv multihost")
 
 
@@ -205,28 +207,46 @@ def wait_cluster(roles, rname, m, until, timeout=1200):
         time.sleep(5)
 
 
-def start_clusters(roles, n_relays, n_exits, n_extras, token):
+@__import__("contextlib").contextmanager
+def funding_lock():
+    """Held from a localcluster's launch until its nodes are funded: `relay-start` may run next to an `up`."""
+    with open(FUND_LOCK, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def start_clusters(roles, n_relays, n_exits, n_extras, token, adopt=()):
     """Every relay and exit machine's localcluster, one after the other (see the module docstring), then all ready.
-    Returns [(role, machine, status)] in global id order: relays first."""
+    Returns [(role, machine, status)] in global id order: relays first. Roles in `adopt` are not started: their
+    clusters are already running (`relay-start`), only their status is read; they mint no client identities."""
     plan = [("relays", m, k) for m, k in spread(n_relays, roles["relays"]["machines"])] + \
            [("exits", m, k) for m, k in spread(n_exits, roles["exits"]["machines"])]
     # the clients' identities: a localcluster mints at most 5, so they are spread over the clusters in plan order
     extras, left = [], n_extras
-    for _ in plan:
-        extras.append(min(5, left))
+    for rname, _, _ in plan:
+        extras.append(0 if rname in adopt else min(5, left))
         left -= extras[-1]
     if left:
         raise SystemExit(f"{n_extras} client identities need at least {-(-n_extras // 5)} node machines (5 per localcluster)")
-    if len(plan) == 2 and plan[0][2] == plan[1][2] == 1:
+    if len(plan) == 2 and plan[0][2] == plan[1][2] == 1 and not adopt:
         raise SystemExit("one relay and one exit: neither cluster can become ready alone; use at least three nodes")
     # larger clusters first; a one-node cluster started first becomes ready once the next one's nodes come up
     for i in sorted(range(len(plan)), key=lambda i: -plan[i][2]):
         rname, m, k = plan[i]
-        launch_cluster(roles, rname, m, k, extras[i], token)
-        wait_cluster(roles, rname, m, "spawned")
+        if rname in adopt:
+            continue
+        with funding_lock():
+            launch_cluster(roles, rname, m, k, extras[i], token)
+            wait_cluster(roles, rname, m, "spawned")
     out = []
     for rname, m, k in plan:
-        out.append((rname, m, wait_cluster(roles, rname, m, "running")))
+        st = wait_cluster(roles, rname, m, "running")
+        if rname in adopt:
+            st = dict(st, extras=[])        # identities an adopted cluster minted at its first start are not reused
+        out.append((rname, m, st))
     say(f"{len(plan)} localcluster(s) running")
     return out
 
@@ -366,16 +386,21 @@ def full_mesh(cluster, merged, amount, timeout):
 
 # -- commands --------------------------------------------------------------------------------------------------------
 def down(args, opts=None, roles=None):
+    """Everything off. --keep-chain: the chain and the relay clusters stay (a relay sweep swaps relays under a running
+    chain); clients, VPN servers, target and exit clusters go."""
     if roles is None:
         opts, roles = load_hosts(args.hosts)
+    keep = getattr(args, "keep_chain", False)
     env = dict(os.environ)
     stop_clients(roles, env)
     ex = roles["exits"]
     with ThreadPoolExecutor(8) as pool:
         list(pool.map(lambda m: m["host"].run(f"cd {ex['repo']} && SERVER_COUNT=8 just server-stop target-stop >/dev/null 2>&1; true",
                                               timeout=300), ex["machines"]))
-        list(pool.map(lambda rm: stop_cluster(roles, rm[0], rm[1]), [(r, m) for r in ("exits", "relays") for m in roles[r]["machines"]]))
-    chain(roles)["host"].run(f"docker rm -f {CHAIN_NAME} >/dev/null 2>&1; true", timeout=120)
+        list(pool.map(lambda rm: stop_cluster(roles, rm[0], rm[1]),
+                      [(r, m) for r in (("exits",) if keep else ("exits", "relays")) for m in roles[r]["machines"]]))
+    if not keep:
+        chain(roles)["host"].run(f"docker rm -f {CHAIN_NAME} >/dev/null 2>&1; true", timeout=120)
     cfg = Config()
     for f in ("multihost.json", "multihost.env", relaytopo.TOPOLOGY_FILE):
         (cfg.config_dir / f).unlink(missing_ok=True)
@@ -390,8 +415,13 @@ def up(args):
     write_ssh_config(opts, roles)
     cfg = Config()
     cfg.config_dir.mkdir(parents=True, exist_ok=True)
-    start_chain(roles)
-    merged = merge(roles, opts, start_clusters(roles, n_relays, n_exits, n, secrets.token_hex(16)))
+    if args.keep_chain:
+        if Host(None).out(f"curl -s -o /dev/null -m 5 -w '%{{http_code}}' {chain_url(roles)}/", timeout=20) in ("", "000"):
+            raise SystemExit(f"--keep-chain: no chain at {chain_url(roles)}")
+        merged = merge(roles, opts, start_clusters(roles, n_relays, n_exits, n, secrets.token_hex(16), adopt=("relays",)))
+    else:
+        start_chain(roles)
+        merged = merge(roles, opts, start_clusters(roles, n_relays, n_exits, n, secrets.token_hex(16)))
     status_file = cfg.config_dir / "multihost.json"
     (cfg.config_dir / "blokli_url").write_text(merged["blokli_url"] + "\n")
     fetch_extras(opts, merged, cfg)
@@ -455,6 +485,32 @@ def up(args):
     say(f"multihost {args.mode} n={n} up: {n_relays} relay(s) on {len(roles['relays']['machines'])} machine(s), {n_exits} exit(s) "
         f"on {len(roles['exits']['machines'])}, {n} client(s) on {len(roles['clients']['machines'])}; target {target_ip}; "
         f"env in {cfg.config_dir / 'multihost.env'}")
+
+
+def relay_start(args):
+    """A one-node relay cluster on every relay machine of HOSTS that runs none, on the running chain (`up` with
+    --keep-chain adopts them later): launched one at a time under the funding lock, then each waited for until
+    ready (/readyz needs a peer: some other node must be up on the chain)."""
+    opts, roles = load_hosts(args.hosts)
+    r = roles["relays"]
+    if Host(None).out(f"curl -s -o /dev/null -m 5 -w '%{{http_code}}' {chain_url(roles)}/", timeout=20) in ("", "000"):
+        raise SystemExit(f"no chain at {chain_url(roles)}")
+    todo = []
+    for m in r["machines"]:
+        try:
+            st = json.loads(m["host"].out(f"{r['localcluster_bin']} status --data-dir {DATA['relays']}", timeout=60) or "{}")
+        except ValueError:
+            st = {}
+        if st.get("state") == "running":
+            say(f"relay on {m['name']}: already running")
+            continue
+        with funding_lock():
+            launch_cluster(roles, "relays", m, 1, 0, secrets.token_hex(16))
+            wait_cluster(roles, "relays", m, "spawned")
+        todo.append(m)
+    for m in todo:
+        st = wait_cluster(roles, "relays", m, "running")
+        say(f"relay on {m['name']} ready: {[nd.get('address') for nd in st.get('nodes', [])]}")
 
 
 def need(role, r):
@@ -556,12 +612,15 @@ def main():
     u.add_argument("--funding", default=os.environ.get("RELAY_TOPO_FUNDING", "1 wxHOPR"))
     u.add_argument("--timeout", type=int, default=900)
     u.add_argument("--server-per-client", action="store_true", help="single-exit: a VPN server per client, as the 2026-09-30 run had it")
-    sub.add_parser("down", help="stop everything on every machine")
+    u.add_argument("--keep-chain", action="store_true", help="use the running chain and adopt the relays' running clusters (relay-start)")
+    d = sub.add_parser("down", help="stop everything on every machine")
+    d.add_argument("--keep-chain", action="store_true", help="leave the chain and the relay clusters running")
+    sub.add_parser("relay-start", help="a one-node relay cluster on every relay machine that runs none (the chain must be up)")
     sub.add_parser("check", help="what each machine has")
     p = sub.add_parser("provision", help="copy what the machines are missing from this one")
     p.add_argument("--parallel", type=int, default=8)
     args = ap.parse_args()
-    {"up": up, "down": down, "check": check, "provision": provision}[args.cmd](args)
+    {"up": up, "down": down, "check": check, "provision": provision, "relay-start": relay_start}[args.cmd](args)
 
 
 if __name__ == "__main__":

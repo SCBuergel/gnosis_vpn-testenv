@@ -38,7 +38,14 @@ to the last finish, a longer stretch than the one the rates cover, which underst
 machine's UDP error counters (RcvbufErrors and friends: a socket buffer that overflows drops packets while the CPU
 still looks idle); its hoprd's own packet counters (received, sent, rejected, dropped at the egress ring buffer); the
 other roles' machines; the frames each client discarded (return-path loss as the client sees it); the hoprd and
-client versions and one line of machine specs per role; reconnects next to tunnel-ping timeouts."""
+client versions and one line of machine specs per role; reconnects next to tunnel-ping timeouts.
+
+PING=1: every transfer also pings the target through the tunnel once a second for its length (transferprobe.py
+--ping); the probe JSON keeps the round-trip times and the rung row their pool over all of the rung's transfers
+(median, p95, loss %). Recorded here; T36-relay-machine-class scores them.
+
+complete_gate=False (T36-relay-machine-class): a transfer that does not complete within CAP is recorded, not failed.
+A small relay class cannot carry n x DOWN_BYTES within CAP by design; its overlap rates are what that test scores."""
 import json
 import statistics as st
 import time
@@ -48,10 +55,12 @@ from . import relaytopo, shell
 from .client import Client, ConnectFailed
 from .client import telemetry_sum
 from .hosts import UDP_ERRORS, Host, Sampler, machine_window
+from .stats import ping_summary
 from .verdicts import log, utc_now
 
 KNOBS = dict(LADDER="1 2 3 4 5", DOWN_BYTES=25000000, UP_BYTES=25000000, CAP=180, IDLE_S=10, PAUSE_S=10, START_LEAD_S=5,
-             RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90, PKT_BYTES_MAX=1000, BUCKET_S=5, SAMPLE_S=2)
+             RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90, PKT_BYTES_MAX=1000, BUCKET_S=5, SAMPLE_S=2,
+             PING=0)
 # T34 and T35 compare one relay and one exit under load: 100 MB each way, 300 s (2.67 Mbit/s) to complete
 SCALING_KNOBS = dict(KNOBS, DOWN_BYTES=100000000, UP_BYTES=100000000, CAP=300)
 PROBE = "/suite/probes/transferprobe.py"
@@ -234,7 +243,7 @@ def transfer_phase(group, direction, nbytes, k, target_ip, groups, save):
     try:
         start_at = time.time() + float(k.START_LEAD_S)
         base = (f"python3 {PROBE} --host {target_ip} --dir {direction} --bytes {int(nbytes)} --start-at {start_at:.3f} "
-                f"--timeout {int(k.CAP)}")
+                f"--timeout {int(k.CAP)}" + (f" --ping {target_ip}" if int(k.PING) else ""))
 
         def one(cl):
             raw = cl.out(base + (f" --iface {cl.iface}" if cl.iface else ""), timeout=int(k.CAP) + int(k.START_LEAD_S) + 120)
@@ -308,8 +317,9 @@ def clocks(groups):
             "bounds_s": bounds, "ntp": {key: ntp for key, (_, _, ntp) in got.items() if ntp}}
 
 
-def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay"):
-    """under_test: "relay" (T33, T34) or "exit" (T35): whose machine and process CPU the report leads with."""
+def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay", complete_gate=True):
+    """under_test: "relay" (T33, T34) or "exit" (T35): whose machine and process CPU the report leads with.
+    complete_gate=False records an incomplete transfer instead of failing it (see the module docstring)."""
     k = knobs
     topo = relaytopo.load(cfg.config_dir)
     if topo is None or topo.get("mode") != mode:
@@ -473,6 +483,7 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay
             "disconnect_cmds": sum(dcmd), "connect_ms": [r.get("connect_ms") for r in conn],
             "incomplete_down": sum(1 for r in down if not r.get("complete")),
             "incomplete_up": sum(1 for u in up if not u.get("complete")),
+            "down_ping": ping_summary(down), "up_ping": ping_summary(up) if up else None,
         }
         table.append(rung)
         checks.row(kind="rung", **rung)
@@ -483,7 +494,9 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay
         bad = [why(c, r) for c, r in zip(group_t, down) if not r.get("complete")] + [why(c, u) for c, u in zip(group_t, up) if not u.get("complete")]
         diag = (f"reconnects {rung['reconnects']} (tunnel-ping timeouts {rung['ping_timeouts']}), Disconnect commands {rung['disconnect_cmds']}, "
                 f"connected before the transfers {sum(connected)}/{n}, start skew {dov['start_skew_s']}s down / {uov['start_skew_s'] if uov else '-'}s up")
-        if bad:
+        if bad and not complete_gate:
+            checks.record(f"n={n}: {len(bad)} transfer(s) incomplete within CAP={k.CAP}s (not scored here): " + "; ".join(bad) + f"; {diag}")
+        elif bad:
             checks.failed(f"n={n}: {len(bad)} transfer(s) incomplete within CAP={k.CAP}s: " + "; ".join(bad) + f"; {diag}")
         else:
             checks.passed(f"n={n}: all {n} download(s) of {k.DOWN_BYTES} B" + (f" and upload(s) of {k.UP_BYTES} B" if up else "")
@@ -541,7 +554,9 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay
         checks.record(f"n={n}: steadiness, aggregate per {k.BUCKET_S}-s bucket min/median/max: down {_mmm(rung['down_bucket_mbit'])}, "
                       f"up {_mmm(rung['up_bucket_mbit'])} Mbit/s; longest stall of a transfer {rung['down_stall_max_s']}s down / "
                       f"{rung['up_stall_max_s']}s up; frames discarded by the clients {rung['frames_discarded']} "
-                      f"(most on one client {rung['frames_discarded_max']}); uploads counted as {', '.join(rung['up_counted']) or '-'}")
+                      f"(most on one client {rung['frames_discarded_max']}); uploads counted as {', '.join(rung['up_counted']) or '-'}"
+                      + "".join(f"; ping {d} median {p['p50_ms']} / p95 {p['p95_ms']} ms, {p['lost']} of {p['sent']} lost"
+                                for d, p in (("down", rung["down_ping"]), ("up", rung["up_ping"])) if p))
         checks.record(f"n={n}: {under_test} {rung['ut_nodes']}: packets down {_counts(ut_d)}; up {_counts(ut_u)}; machine UDP errors "
                       f"down {_udp(rung['ut_udp_errors_down'])} / up {_udp(rung['ut_udp_errors_up'])}; wire bytes (rx, tx) down "
                       f"{rung['ut_wire_down']} / up {rung['ut_wire_up']}")

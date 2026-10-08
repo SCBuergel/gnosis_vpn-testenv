@@ -77,9 +77,9 @@ behind it. The catalogue is `docs/regression-catalogue.md`, the mechanics
   longer, shorten the ramp (`GNOSISVPN_SURB_RAMP_SECS`,
   `[connection.surb_balancing.ramp]`); never idle longer. Only T07-cold-start's
   cold arm and T15-warmup-knee pass `ramp_wait_opt_out=True`, because measuring
-  the ramp is their job; T33-relay-baseline, T34-single-relay-scaling and
-  T35-single-exit-scaling pass it for the requested 10 s idle (`IDLE_S`) and say
-  so.
+  the ramp is their job; T33-relay-baseline, T34-single-relay-scaling,
+  T35-single-exit-scaling and T36-relay-machine-class pass it for the requested
+  10 s idle (`IDLE_S`) and say so.
 - The deadman: every connect arms a detached `sleep DEADMAN && disconnect` (900
   s) so the kill switch can never strand a host. A session that must outlive it
   calls `client.deadman_cover(DUR)` before connect (T23-sustained-soak,
@@ -163,8 +163,8 @@ behind it. The catalogue is `docs/regression-catalogue.md`, the mechanics
   `release/4.1 @ a5887bc` ("Bump to version 4.1.3"), so build its localcluster
   there; 4.0.3: tag `v4.0.3`. Build the localcluster from the same tree as the
   hoprd binary.
-- T33-relay-baseline, T34-single-relay-scaling and T35-single-exit-scaling need
-  their own stack (`just relay-topology` or `just multihost-up`) and more than
+- T33-relay-baseline, T34-single-relay-scaling, T35-single-exit-scaling and
+  T36-relay-machine-class need their own stack (`just relay-topology` or `just multihost-up`) and more than
   the stock localcluster's five nodes: build it with
   `patches/hoprd-localcluster-max16.patch`. The first attempt ran into the cap
   ("size must be between 1 and 5") and the tests SKIPped on no stack.
@@ -173,6 +173,9 @@ behind it. The catalogue is `docs/regression-catalogue.md`, the mechanics
   same five: ten clients shared five identities and every 10-client rung lost
   its return traffic. `tests/multihost.py` refuses a stack in which two clients
   share an identity.
+- A rate holds only on the machine class it was measured on: T36-relay-machine-class reads per provider, size and rung thresholds from `tests/machine_classes.toml`, holds the relay machine against its class (provider, vCPUs, memory, CPU model) before a byte moves, and records instead of scoring when a knob or the clients' and exits' machines differ from the calibration. Recalibrate with `multihost/machine_ladder.py calibrate`, never by editing a number: one rule derives every threshold. A small class cannot complete n x 100 MB in 300 s, so that test records incomplete transfers and scores the overlap rate.
+- A fleet whose relays come and go keeps no host keys inside its private network: DigitalOcean handed a deleted relay's private address to the next droplet and every ssh to it failed ("REMOTE HOST IDENTIFICATION HAS CHANGED"). Jobs on its control machine run detached (`setsid nohup`), not as systemd-run units: a transient unit was started again minutes later and a second `multihost.py up` wiped the first one's chain.
+- A rung that fails on one client's connect alone is the rig until shown otherwise: in 3 of 9 bring-ups of the 2026-10-07 sweep one client never resolved the packet keys of its exit's channel ("could not find packet keys for channel endpoints", "cannot find 1 hop path") and failed every connect, whatever the relay.
 - `HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64` is a no-op from
   `release/4.1 @ 60269a3` (it worked around hoprnet #8246 before); a run with it
   is not a different configuration. The #8425 pool arbiter has no config surface

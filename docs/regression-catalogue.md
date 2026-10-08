@@ -1,6 +1,6 @@
 # Regression test catalogue
 
-The suite in `tests/` runs 24 tests, plus the relay-scaling gates T33 to T35
+The suite in `tests/` runs 24 tests, plus the relay-scaling gates T33 to T36
 that need a topology of their own, against a `gnosis_vpn-testenv` stack
 (localcluster, exit server, client containers, in-cluster traffic target) and
 keeps 8 runbook entries for investigations. Each test's method, criteria and the
@@ -90,7 +90,9 @@ stall is intermittent, so re-run once before removing the tag.
 | `LOG_MB_MIN_MAX`                      | 200 MB/min   | T23-sustained-soak client log growth                                                                                       | 63-70 MB/min at path-planner debug                                                                                                         | the incident was 1.6 GB/min                                                                                   |
 | `CAP` (T33; T34, T35)                 | 180 s; 300 s | every transfer of a rung (25 MB in T33, 100 MB in T34 and T35)                                                             | not calibrated yet (first run 2026-09-29)                                                                                                  | 25 MB in 180 s is 1.1 Mbit/s; a completion bound, not a rate threshold, until the ladder is calibrated        |
 | `ATTRIB_MIN_PCT`                      | 90 %         | T33-relay-baseline: share of forwarded packets on the rung's relays (not scored with one relay)                            | 99.9-100 % (rs2, 2026-09-29)                                                                                                               | the topology leaves no other route; the margin is for probe traffic                                           |
-| `PKT_BYTES_MAX`                       | 1000 B       | T33 to T35: floor of forwarded packets = transferred bytes / this, per phase                                               | 2.2-2.4 packets per 1000 B (rs2)                                                                                                           | above a HOPR packet's payload, so it holds on any healthy stack and fails a download that bypassed the relays |
+| `PKT_BYTES_MAX`                       | 1000 B       | T33 to T36: floor of forwarded packets = transferred bytes / this, per phase                                               | 2.2-2.4 packets per 1000 B (rs2)                                                                                                           | above a HOPR packet's payload, so it holds on any healthy stack and fails a download that bypassed the relays |
+| `agg_min_mbit[class n]` | per class and rung, `tests/machine_classes.toml` (c-4: 5.5 at every rung; c-16: 6.5, 13.5, 24.0, 23.0, 23.5, 22.5) | T36-relay-machine-class aggregate download of rung n through one relay of the class | sw1, 2026-10-07, DigitalOcean lon1, one run per size (two for s-8vcpu-16gb): c-2 4.1, c-4 7.5, c-8 16, c-16 32 Mbit/s at the ceiling | `floor_pct`=75 % of the lowest measured aggregate, rounded down to 0.5 Mbit/s; a rung the calibration lacks is recorded, not scored |
+| `ping_p50_max_ms[class n]` | per class and rung, `tests/machine_classes.toml` (c-4: 2500 at n=1 to 13500 at n=6) | T36-relay-machine-class median round trip through the tunnel during rung n's download | sw1: 0.4 s (c-16, n=1) to 17 s (s-1vcpu-2gb, n=5) | `ping_mult`=2 x the highest measured median, rounded up to 100 ms; latency degrades before throughput |
 
 ## The run
 
@@ -412,6 +414,18 @@ near 60 % of its machine), and the relay machines must be read first: at that
 same level the top rungs do not tell the exit from the relay pool.
 T22-concurrent-clients keeps its standard stack.
 
+### T36-relay-machine-class · **gate** · relayscale
+
+A regression gate per infrastructure provider and machine size: does one relay on a given machine class (`T36_MACHINE`=`digitalocean:c-4`, DigitalOcean's 4-vCPU CPU-optimized size) still carry what that class carried when it was calibrated? The T34-single-relay-scaling ladder (`shared` topology on machines of their own: one relay machine, each client and each exit on its own) with `LADDER`="1 2 3 4 5 6", `DOWN_BYTES`=100000000, `UP_BYTES`=0, `CAP`=300 s, `IDLE_S`=10 s and `PING`=1 (every transfer pings the target through the tunnel once a second), held per rung against absolute thresholds per class from `tests/machine_classes.toml` (`CLASSES`="" selects another table).
+
+Before the ladder the relay machine is probed (vCPUs, CPU model, MemTotal, and which provider's metadata service answers) and held against its class: with `MACHINE` set, another provider, vCPU count or MemTotal outside 0.90-1.0 of the class's memory FAILs the test before a byte moves; another CPU model is a WARN. With `MACHINE`="" the class is the one table entry the machine matches; none or several (DigitalOcean's c-4 and s-4vcpu-8gb differ only in CPU model) SKIP. SKIP too when the relay shares its machine with another role.
+
+Scored per rung where the class has a threshold for it: aggregate download over the overlap >= `agg_min_mbit[class n]`; median ping of all the rung's echoes (lost ones excluded) <= `ping_p50_max_ms[class n]`. Both are derived from the calibration runs by one rule (`floor_pct`=75 % of the lowest aggregate, rounded down to 0.5 Mbit/s; `ping_mult`=2 x the highest median, rounded up to 100 ms) and are recorded, not scored, with a WARN when a knob of the table's `[calibration] knobs` differs or the clients' or exits' machines have fewer vCPUs than the calibration's 8 or are fewer than the top rung. Transfers that do not complete within `CAP` are recorded, not failed (a 2-vCPU relay cannot move 6 x 100 MB in 300 s); every other ladder check FAILs as in T34-single-relay-scaling. Each run appends a measured-against-calibrated table to `T36-relay-machine-class.md`.
+
+The table (calibration sw1, 2026-10-07: hoprd 4.1.3, client 0.96.4, server 0.7.0, clients and exits on c-8, lon1) has two ladders, `digitalocean:cpu-optimized` (c-2, c-4, c-8, c-16) and `digitalocean:basic` (s-1vcpu-2gb, s-2vcpu-4gb, s-4vcpu-8gb, s-8vcpu-16gb). Ceilings: c-16 32 Mbit/s from n=3, c-8 16 from n=2, c-4 7.5, c-2 4.1, s-8vcpu-16gb 14-15, s-4vcpu-8gb 7.5-8.4, s-1vcpu-2gb 2.8. hoprd levels off at 60-69 % of every CPU-optimized size, and DigitalOcean's c-N behaves like N/2 physical cores (openssl thread scaling 1.07 on c-2, 8.49 on c-16), so the ceiling follows the vCPUs. At n=1 the large classes are client-bound (about 9.5 Mbit/s). Uncalibrated, so only recorded: s-2vcpu-4gb from n=2 and s-8vcpu-16gb from n=4 (rungs the sweep lost to one client's connect, see AGENTS.md).
+
+A whole ladder on DigitalOcean: `python3 multihost/machine_ladder.py run --name NAME --snapshot ID --ladder digitalocean:cpu-optimized` (or `--sizes c-4 c-8`) makes the fleet (control, 6 clients and 6 exits on c-8 from a `do_fleet.py bake` snapshot), then one relay droplet per size from plain Ubuntu, starts the next three relays' hoprd on the running chain while one is measured, runs the test with `T36_MACHINE` set per size, records the full specs and a CPU benchmark of every droplet and 1-s vmstat of every machine during each test, and deletes each relay after its test; `report` writes summary.md and summary.csv, `destroy` deletes the fleet. A new size: add its entry (vcpus, memory_gb, cpu_model) to the table, run its ladder (recorded only), then `machine_ladder.py calibrate digitalocean:SIZE=RUNDIR --write`. Another provider: add its `detect` command, ladders and sizes to the table and bring the stack up with `just multihost-up HOSTS shared 6`; only DigitalOcean is automated.
+
 ## Multi-machine testenv
 
 `tests/multihost.py` spreads one stack over several machines: the chain (Anvil +
@@ -468,6 +482,8 @@ images, the node binaries and the repo (image:create scope needed);
 `create --image <snapshot id>` then gives droplets that are ready about 55 s
 after creation and need no provisioning beyond a repo update. Rebake when a
 version changes; `snapshots` lists them.
+
+**Swapping one relay under a running stack.** `tests/multihost.py HOSTS relay-start` starts a one-node relay cluster on every relay machine of HOSTS that runs none, on the running chain (funded, Safe deployed, announced; under the funding lock `/tmp/gnosis_vpn-testenv-funding.lock`, since every cluster funds from the chain's one dev account), and `just multihost-up HOSTS shared N --keep-chain` keeps the chain, adopts that running relay and restarts only the exits and clients around it (`multihost.py down --keep-chain` stops everything else). `multihost/machine_ladder.py` uses the pair so that a swap costs one exit and client restart, not a new chain (T36-relay-machine-class).
 
 ## The runbook
 

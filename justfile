@@ -455,6 +455,10 @@ multihost-test name *args:
     . "{{CONFIG_DIR}}/multihost.env"
     cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression --only "{{name}}" --no-preconditions {{args}}
 
+# T36-relay-machine-class over a ladder of relay machine sizes on DigitalOcean (multihost/machine_ladder.py --help)
+machine-ladder *args:
+    python3 "{{justfile_directory()}}/multihost/machine_ladder.py" {{args}}
+
 # Run the suite across version/config cells from a cells file (see tests/matrix.py --help)
 matrix cells *args:
     #!/usr/bin/env bash

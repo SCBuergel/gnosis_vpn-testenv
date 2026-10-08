@@ -24,6 +24,7 @@ just suite --group realtime      # one group: preflight, throughput, realtime, r
 just suite --knob T22_LADDER="1 2"   # a per-test knob (or T22_LADDER="1 2" in the environment)
 just test t04                    # one test, without t01 in front; runbook items (t25 … t32) run this way too
 just relay-topology paired 5 && just test t33   # relay scaling on its own topology (t34: shared, t35: single-exit); catalogue "Relay scaling"
+T36_MACHINE=digitalocean:c-4 just multihost-test t36   # one relay against its machine class (tests/machine_classes.toml)
 just suite --runbook             # include the runbook items in a run
 just matrix tests/cells/example.cells --fast
 just suite-selftest              # offline unit tests of suitelib, no stack

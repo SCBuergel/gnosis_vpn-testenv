@@ -42,3 +42,15 @@ def num(x, default=0.0):
         return float(x)
     except (TypeError, ValueError):
         return default
+
+
+def ping_summary(results):
+    """Every echo of the transfers' --ping logs pooled: {"sent", "lost", "p50_ms", "p95_ms", "loss_pct"}; None when no
+    transfer pinged. A lost echo has no round-trip time and counts only in the loss."""
+    pings = [p for r in results for p in (r.get("pings") or [])]
+    if not any(r.get("pings") is not None for r in results):
+        return None
+    rtts = [p[2] for p in pings if p[2] is not None]
+    lost = len(pings) - len(rtts)
+    return {"sent": len(pings), "lost": lost, "p50_ms": pct(rtts, 0.5), "p95_ms": pct(rtts, 0.95),
+            "loss_pct": round(100 * lost / len(pings), 1) if pings else None}
