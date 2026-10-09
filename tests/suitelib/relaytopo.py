@@ -93,7 +93,14 @@ def render_client_config(templates_dir, c, hops=1, pix_on=False):
             raise ValueError(f"client template has no {old}; cannot point client {c['k']} at its own server")
         text = text.replace(old, new)
     text = text.rstrip("\n") + (
-        "\n\n# relay-scaling topology: exactly one outgoing channel, to this client's relay\n"
+        # the whole chain index before the node starts: at the client's default sync_tolerance = 50 an edge client
+        # counts as synced with half the accounts loaded, wires its channel graph without the packet keys of the rest
+        # ("could not find packet keys for channel endpoints"), and one whose exit's key was in the missing half never
+        # finds its return path ("cannot find 1 hop path <exit> -> <client>"): 3-13 of 16-30 clients per bring-up on
+        # 2026-10-09, cured only by a restart that happened to load more
+        "\n\n# relay-scaling topology: every account synced before the node starts\n"
+        "[blokli]\nsync_tolerance = 100\nconnection_sync_timeout = \"120s\"\n"
+        "\n# relay-scaling topology: exactly one outgoing channel, to this client's relay\n"
         "[strategy]\nmin_open_channels = 1\ntarget_open_channels = 1\n\n"
         f"[strategy.channel_allowlist]\nenabled = true\npeers = [\"{c['relay_address']}\"]\n")
     return text

@@ -1,0 +1,33 @@
+diff --git a/localcluster/src/cli.rs b/localcluster/src/cli.rs
+index 8d031dd..87c139d 100644
+--- a/localcluster/src/cli.rs
++++ b/localcluster/src/cli.rs
+@@ -151,6 +151,13 @@ pub struct Args {
+     #[arg(long, default_value_t = DEFAULT_NUM_EXTRA_IDENTITIES, value_parser = parse_extras)]
+     pub extra_identities: usize,
+ 
++    /// Private key (hex) of the account that funds this cluster's identities (xDai and wxHOPR); default: Anvil
++    /// account 0. testenv multi-machine patch: clusters sharing one chain each fund from their own account, since
++    /// the funding transactions of two clusters on one signer collide on its nonce ("replacement transaction
++    /// underpriced") and the losing cluster exits.
++    #[arg(long, env = "HOPRD_LOCALCLUSTER_FUNDER_KEY")]
++    pub funder_key: Option<String>,
++
+     /// Inject artificial latency on inter-node P2P traffic via per-node UDP relays.
+     ///
+     /// One value selects the delay source; an optional `@<port>` suffix overrides the
+diff --git a/localcluster/src/main.rs b/localcluster/src/main.rs
+index 2bb226f..b365b52 100644
+--- a/localcluster/src/main.rs
++++ b/localcluster/src/main.rs
+@@ -156,6 +156,10 @@ async fn main() -> Result<()> {
+                 cli::ChannelManagement::Strategy | cli::ChannelManagement::Both
+             ),
+             latency: args.latency.clone(),
++            private_key: args
++                .funder_key
++                .clone()
++                .unwrap_or_else(|| identity::DEFAULT_PRIVATE_KEY.to_string()),
+             ..Default::default()
+         };
+ 

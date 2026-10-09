@@ -1,0 +1,8 @@
+#!/bin/sh
+# python3 with boto3 for aws_fleet.py and the ladder on AWS: a venv in ~/.venvs/aws, made on first use
+V="${GVPN_AWS_VENV:-$HOME/.venvs/aws}"
+if [ ! -x "$V/bin/python" ] || ! "$V/bin/python" -c 'import boto3' 2>/dev/null; then
+  if command -v uv >/dev/null; then uv venv -q "$V" && uv pip install -q --python "$V/bin/python" boto3 >&2
+  else python3 -m venv "$V" && "$V/bin/pip" install -q boto3 >&2; fi
+fi
+exec "$V/bin/python" "$@"

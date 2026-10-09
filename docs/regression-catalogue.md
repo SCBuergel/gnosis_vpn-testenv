@@ -444,13 +444,7 @@ just multihost-test t33                    # the test against it (CONFIG_DIR/mul
 just multihost-down HOSTS
 ```
 
-How it comes up: the chain container starts on its machine; the relays' and the
-exits' machines each run a `hoprd-localcluster` with `--chain-url` at that
-chain, `--p2p-host`/`--api-host` their `addr` and `--channel-management none`,
-one after the other because both fund from the chain's one dev account. Each
-localcluster pre-announces its nodes right after their Safes (the window Blokli
-re-indexes), so every node reaches every other. The relays' cluster also mints
-the clients' identities. The merged status (relays node-0.., exits after them,
+How it comes up: the chain container starts on its machine with 64 Anvil accounts; account 0 hands each of the others 50000 wxHOPR. The relays' and the exits' machines each run a `hoprd-localcluster` with `--chain-url` at that chain, `--p2p-host`/`--api-host` their `addr`, `--channel-management none` and `--funder-key` an account of its own (patches/hoprd-localcluster-funder-key.patch), 8 at a time; a cluster that fails is launched again, 3 times in all. Without the option the clusters start one after the other, since on one funding account two clusters collide on its nonce. Each localcluster pre-announces its nodes right after their Safes (the window Blokli re-indexes), so every node reaches every other. The clients' identities are minted spread over the clusters, at most 5 per cluster. The clients start 4 at a time, each waited for until Ready and started again if it exits; `just multihost-doctor HOSTS --repair` then has every client connect and ping through its tunnel, and restarts one that cannot. The merged status (relays node-0.., exits after them,
 each with its REST URL, `ssh` target and role) is written to
 `CONFIG_DIR/multihost.json` and read by the suite through `MULTIHOST_STATUS`;
 the target is reached through `TARGET_HOST`. `paired` and `shared` build the

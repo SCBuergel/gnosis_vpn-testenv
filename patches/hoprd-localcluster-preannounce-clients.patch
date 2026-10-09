@@ -1,0 +1,43 @@
+--- a/localcluster/src/identity.rs
++++ b/localcluster/src/identity.rs
+@@ -695,6 +695,40 @@
+                 poll_handle.await??
+             };
+ 
++            // testenv patch: Pre-register and pre-announce the extra identity (its KeyBinding, no multiaddr: it is a
++            // client behind NAT, as the VPN client announces itself) the way the nodes above are. Announced by the
++            // client at its start, during Blokli's live phase, the KeyBinding was missed on 2 of 30 clients
++            // (2026-10-08): no peer learned the client's packet key ("could not find packet keys for channel
++            // endpoints"), its 1-hop path never formed, every connect failed, and a restart did not help because
++            // the announcement was already on chain. Here it lands in the Safe-deployment epoch Blokli re-indexes.
++            let mut extra_module_connector = create_trustful_hopr_blokli_connector(
++                &kp.chain_key,
++                BlockchainConnectorConfig {
++                    tx_timeout_multiplier: DEFAULT_TX_TIMEOUT_MULTIPLIER,
++                    ..Default::default()
++                },
++                blokli_client.clone(),
++                safe.module,
++            )
++            .await?;
++            extra_module_connector.connect().await?;
++            match extra_module_connector.register_safe(&safe.address).await {
++                Ok(awaiter) => {
++                    awaiter.await.context("extra identity safe registration")?;
++                }
++                Err(SafeRegistrationError::AlreadyRegistered(_)) => {}
++                Err(e) => return Err(anyhow::anyhow!("extra {id}: safe registration failed: {e}")),
++            }
++            let no_addrs: [Multiaddr; 0] = [];
++            match extra_module_connector.announce(&no_addrs, &kp.packet_key).await {
++                Ok(awaiter) => {
++                    awaiter.await.context("extra identity pre-announce confirmation")?;
++                    info!(extra_id = %id, "extra identity pre-announced");
++                }
++                Err(AnnouncementError::AlreadyAnnounced) => {}
++                Err(e) => return Err(anyhow::anyhow!("extra {id}: pre-announce failed: {e}")),
++            }
++
+             let id_file = home_path.join(format!("extra_id_{id}.id"));
+             let id_file_str = id_file
+                 .to_str()

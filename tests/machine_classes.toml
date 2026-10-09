@@ -106,3 +106,45 @@ measured_agg_mbit = [[9.52, 13.8, 14.31], [9.65, 14.95, 14.47]]
 measured_ping_p50_ms = [[426.0, 1109.0, 1756.0], [398.0, 995.0, 1694.0]]
 agg_min_mbit = [7.0, 10.0, 10.5]
 ping_p50_max_ms = [900, 2300, 3600]
+
+[providers.aws]
+detect = "grep -qi amazon /sys/devices/virtual/dmi/id/sys_vendor"
+region = "eu-north-1"
+
+[providers.aws.ladders]
+physical-cores = ["m7a.medium", "c7a.large", "c7a.xlarge", "c7a.2xlarge", "c7a.4xlarge", "c7a.8xlarge", "c7a.16xlarge"]
+
+[providers.aws.sizes."m7a.medium"]
+vcpus = 1
+memory_gb = 4
+cpu_model = "AMD EPYC"
+
+[providers.aws.sizes."c7a.large"]
+vcpus = 2
+memory_gb = 4
+cpu_model = "AMD EPYC"
+
+[providers.aws.sizes."c7a.xlarge"]
+vcpus = 4
+memory_gb = 8
+cpu_model = "AMD EPYC"
+
+[providers.aws.sizes."c7a.2xlarge"]
+vcpus = 8
+memory_gb = 16
+cpu_model = "AMD EPYC"
+
+[providers.aws.sizes."c7a.4xlarge"]
+vcpus = 16
+memory_gb = 32
+cpu_model = "AMD EPYC"
+
+[providers.aws.sizes."c7a.8xlarge"]
+vcpus = 32
+memory_gb = 64
+cpu_model = "AMD EPYC"
+
+[providers.aws.sizes."c7a.16xlarge"]
+vcpus = 64
+memory_gb = 128
+cpu_model = "AMD EPYC"

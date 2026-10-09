@@ -34,6 +34,8 @@ start() {
         docker container inspect "${name}" >/dev/null 2>&1 || break
         sleep 1
     done
+    # a stopped container kept for its log (CLIENT_NO_RM=1) would block the name
+    docker rm -f "${name}" >/dev/null 2>&1 || true
     mkdir -p "${state_dir}" "${SUITE_OUT_DIR}"
 
     local blokli_url extra_id_pass running
@@ -64,7 +66,11 @@ start() {
         )
     fi
 
-    docker run --detach --rm \
+    # CLIENT_NO_RM=1 keeps a client that exits, with its log (tests/multihost.py: a fleet client that died at start
+    # left nothing to read with --rm); the next start or stop removes it
+    local rm_args=(--rm)
+    [ "${CLIENT_NO_RM:-}" = "1" ] && rm_args=()
+    docker run --detach "${rm_args[@]}" \
         --name "${name}" \
         --network "${DOCKER_NETWORK}" \
         --cap-add=NET_ADMIN \
@@ -141,19 +147,25 @@ stop_extra() {
     rm -rf "${state_dir}" 2>/dev/null || sudo rm -rf "${state_dir}" 2>/dev/null || true
 }
 
-# Stop every extra client container (2..16); the primary is left to `stop`.
+# Stop every extra client container (gnosis_vpn-client-<n>, any n) and every stray sidecar; the primary is left to
+# `stop`. It once stopped 2..16 only: on a 30-client fleet clients 17-30 survived `down`, the next `up` rewrote the
+# identity their running containers watch, they exited (75) and `start` had skipped them as "already running".
 clients_stop() {
     local i name
-    for i in $(seq 2 16); do
-        name="gnosis_vpn-client-${i}"
+    for name in $(docker ps -a --format '{{.Names}}' | grep -E '^gnosis_vpn-client-[0-9]+$'); do
+        i="${name##*-}"
         docker rm -f "${name}-tools" >/dev/null 2>&1 || true
-        docker container inspect "${name}" >/dev/null 2>&1 || continue
         docker stop "${name}" >/dev/null 2>&1 || true
         for _ in $(seq 1 30); do
             docker container inspect "${name}" >/dev/null 2>&1 || break
             sleep 1
         done
+        docker rm -f "${name}" >/dev/null 2>&1 || true
         rm -rf "${CLIENT_STATE_DIR}-${i}" 2>/dev/null || sudo rm -rf "${CLIENT_STATE_DIR}-${i}" 2>/dev/null || true
+    done
+    for name in $(docker ps -a --format '{{.Names}}' | grep -E '^gnosis_vpn-client(-[0-9]+)?-tools$'); do
+        [ "${name}" = "gnosis_vpn-client-tools" ] && continue
+        docker rm -f "${name}" >/dev/null 2>&1 || true
     done
 }
 
@@ -166,6 +178,7 @@ stop() {
         docker container inspect gnosis_vpn-client >/dev/null 2>&1 || break
         sleep 1
     done
+    docker rm -f gnosis_vpn-client >/dev/null 2>&1 || true     # kept by CLIENT_NO_RM=1
     # only touch sudo if a host-native client is actually running, so the container-only workflow (the
     # common case) never hits a sudo prompt here. Match the host-native binary path, not the bare name:
     # container processes (a second client) are visible to pgrep too.

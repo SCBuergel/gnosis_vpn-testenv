@@ -95,3 +95,23 @@ def test_ping_summary_pools_the_transfers_and_counts_lost_echoes():
     res = [{"pings": [[1, 0.0, 100.0], [2, 1.0, None], [3, 2.0, 300.0]]}, {"pings": [[1, 0.0, 200.0]]}]
     assert ping_summary(res) == {"sent": 4, "lost": 1, "p50_ms": 200.0, "p95_ms": 300.0, "loss_pct": 25.0}
     assert ping_summary([{"bytes": 5}]) is None
+
+
+def test_ladder_ends_one_rung_past_saturation():
+    from suitelib.relaybench import past_saturation
+
+    def run(aggs, pct=50):
+        table = []
+        for n, agg in enumerate(aggs, 1):
+            table.append({"n": n, "down_agg_mbit": agg})
+            if past_saturation(table, pct)[0]:
+                return n
+        return None
+    # awsl1 (2026-10-08, AWS physical cores, 4-vCPU clients): aggregate per rung of 1..6 clients
+    assert run([6.294, 6.152, 6.178, 6.143, 6.21, 6.187]) == 2           # 1 core: saturated by one client
+    assert run([9.09, 17.027, 16.845, 16.636, 16.505, 16.73]) == 3       # 4 cores: saturated at 2
+    assert run([8.555, 17.76, 31.387, 33.721, 33.286, 33.296]) == 4      # 8 cores: saturated at 3
+    assert run([9.075, 17.851, 29.208, 37.167, 52.074, 62.758]) is None  # 16 cores: 6 clients never saturate it
+    assert run([6.3, 6.1], pct=0) is None                                 # SATURATE_PCT=0: every rung runs
+    # a rung without a measured aggregate (a failed connect) is no plateau
+    assert past_saturation([{"n": 1, "down_agg_mbit": 9.0}, {"n": 2, "down_agg_mbit": None}], 50) == (False, None)

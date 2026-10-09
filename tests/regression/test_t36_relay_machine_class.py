@@ -7,7 +7,8 @@ test per class, one relay machine after another: multihost/machine_ladder.py.
 Shape (suitelib/relaybench.py, `shared` topology): rungs of LADDER="1 2 3 4 5 6" clients, each with its own exit, all
 through the one relay, download DOWN_BYTES=100000000 on every client at once (one common start, START_LEAD_S=5),
 UP_BYTES=0 (the classes were calibrated on downloads), CAP=300 s, IDLE_S=10 after connecting, PAUSE_S=10 between rungs,
-PING=1: every transfer pings the target through the tunnel once a second for its length. The relay's class is
+PING=1: every transfer pings the target through the tunnel once a second for its length; SATURATE_PCT=0 (off; with a
+value the ladder ends one rung past the relay's saturation, suitelib/relaybench.py). The relay's class is
 MACHINE="" (`<provider>:<size>`, empty: detected), the table CLASSES="" (empty: tests/machine_classes.toml).
 
 Before the ladder, the relay machine is probed (vCPUs, CPU model, MemTotal, and which provider's metadata service

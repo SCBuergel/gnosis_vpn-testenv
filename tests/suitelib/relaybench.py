@@ -45,7 +45,14 @@ PING=1: every transfer also pings the target through the tunnel once a second fo
 (median, p95, loss %). Recorded here; T36-relay-machine-class scores them.
 
 complete_gate=False (T36-relay-machine-class): a transfer that does not complete within CAP is recorded, not failed.
-A small relay class cannot carry n x DOWN_BYTES within CAP by design; its overlap rates are what that test scores."""
+A small relay class cannot carry n x DOWN_BYTES within CAP by design; its overlap rates are what that test scores.
+
+SATURATE_PCT=0 (off): with a value, the ladder ends one rung past saturation instead of running every LADDER rung. A
+rung of n clients is past saturation when its aggregate download did not grow by at least SATURATE_PCT % of what the
+best rung so far (n_b clients, aggregate a_b) would grow to if it scaled with the clients: aggregate < a_b x (1 +
+SATURATE_PCT/100 x (n/n_b - 1)). SATURATE_PCT=50 on a 1-core relay (6.2 Mbit/s at 1 client, 6.15 at 2) stops after
+n=2; on an 8-core relay with LADDER="1 2 3 4 5 6" (8.6, 17.8, 31.4, 33.7, ...) after n=4. The rungs not run are
+recorded as such, never scored."""
 import json
 import statistics as st
 import time
@@ -60,13 +67,27 @@ from .verdicts import log, utc_now
 
 KNOBS = dict(LADDER="1 2 3 4 5", DOWN_BYTES=25000000, UP_BYTES=25000000, CAP=180, IDLE_S=10, PAUSE_S=10, START_LEAD_S=5,
              RELAY_METRIC='hopr_packets_count{type="forwarded"}', ATTRIB_MIN_PCT=90, PKT_BYTES_MAX=1000, BUCKET_S=5, SAMPLE_S=2,
-             PING=0)
+             PING=0, SATURATE_PCT=0)
 # T34 and T35 compare one relay and one exit under load: 100 MB each way, 300 s (2.67 Mbit/s) to complete
 SCALING_KNOBS = dict(KNOBS, DOWN_BYTES=100000000, UP_BYTES=100000000, CAP=300)
 PROBE = "/suite/probes/transferprobe.py"
 # a node's own counters, read from its /metrics around each phase (the forwarded count is RELAY_METRIC)
 NODE_COUNTERS = {"received": 'hopr_packets_count{type="received"}', "sent": 'hopr_packets_count{type="sent"}',
                  "rejected": "hopr_packet_rejected_count", "egress_dropped": "hopr_egress_ring_buffer_dropped"}
+
+
+def past_saturation(table, pct):
+    """(True, why) when the last rung of table is past saturation by the SATURATE_PCT rule (module docstring), else
+    (False, None). A rung without a measured aggregate does not end the ladder: a failure is not a plateau."""
+    rows = [r for r in table if r.get("down_agg_mbit")]
+    if not pct or len(rows) < 2 or rows[-1] is not table[-1]:
+        return False, None
+    last, best = rows[-1], max(rows[:-1], key=lambda r: r["down_agg_mbit"])
+    need = best["down_agg_mbit"] * (1 + pct / 100 * (last["n"] / best["n"] - 1))
+    if last["down_agg_mbit"] >= need:
+        return False, None
+    return True, (f"aggregate {last['down_agg_mbit']} Mbit/s at n={last['n']} < {round(need, 3)} ({pct} % of the growth from "
+                  f"{best['down_agg_mbit']} at n={best['n']} if it scaled with the clients)")
 
 
 def timeout(knobs, connect_timeout=240):
@@ -560,6 +581,10 @@ def run_ladder(cfg, run, cluster, target, checks, knobs, mode, under_test="relay
         checks.record(f"n={n}: {under_test} {rung['ut_nodes']}: packets down {_counts(ut_d)}; up {_counts(ut_u)}; machine UDP errors "
                       f"down {_udp(rung['ut_udp_errors_down'])} / up {_udp(rung['ut_udp_errors_up'])}; wire bytes (rx, tx) down "
                       f"{rung['ut_wire_down']} / up {rung['ut_wire_up']}")
+        done, why = past_saturation(table, float(k.SATURATE_PCT))
+        if done and idx + 1 < len(rungs):
+            checks.record(f"n={n}: past saturation, {why}; ladder ends here (SATURATE_PCT={k.SATURATE_PCT}), rungs {rungs[idx + 1:]} not run")
+            break
     if table:
         write_table(run, checks.test, mode, topo, k, table, info, under_test)
     return table

@@ -443,6 +443,10 @@ multihost-provision hosts:
 multihost-up hosts mode n *args:
     python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" up "{{mode}}" "{{n}}" {{args}}
 
+# Every client of the running multi-machine stack connects and pings through its tunnel; --repair restarts a failing one
+multihost-doctor hosts *args:
+    python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" doctor {{args}}
+
 # Stop the multi-machine stack on every machine in HOSTS
 multihost-down hosts:
     python3 "{{justfile_directory()}}/tests/multihost.py" "{{hosts}}" down
