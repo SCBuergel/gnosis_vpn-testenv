@@ -6,7 +6,8 @@ out, STEP_S apart, until one is left: N phases of STEP_S=60 s with N, N-1, ..., 
 Shape: connect, IDLE_S=10, then one long download (DOWN_BYTES=10000000000, never meant to complete) that pings the
 target through the tunnel once a second for its length; a download that ends early (the tunnel or the connection
 broke) is started again at once, so the byte log and the pings cover the whole run, and every restart is recorded.
-At the start of phase i (i = 2..N) the relay ORDER[i-2] is taken out (ORDER="" : node-0, node-1, ...):
+At the start of phase i (i = 2, 3, ...) the relay ORDER[i-2] is taken out (ORDER="": node-0, node-1, ... until one is
+left; a shorter ORDER takes out only those, e.g. ORDER="0 1" two relays of ten):
 
 - OUTAGE=drop (default): every packet to and from the relay's machine is dropped (iptables, ssh excepted), the
   machine is gone from the network without a word: no reset, no close, the way a power cut or a lost uplink looks
@@ -94,8 +95,8 @@ def test_relay_outage(cfg, run, cluster, target, checks, knobs):
         checks.skip(f"the saved multi-relay topology is not the running stack ({stale})")
     relays = list(topo["relays"])
     order = [int(x) for x in str(k.ORDER).split()] if str(k.ORDER).strip() else relays[:-1]
-    if len(relays) < 2 or len(order) != len(relays) - 1 or not set(order) <= set(relays) or len(set(order)) != len(order):
-        checks.failed(f"ORDER {order}: want {len(relays) - 1} distinct relays of {relays}")
+    if len(relays) < 2 or not 1 <= len(order) <= len(relays) - 1 or not set(order) <= set(relays) or len(set(order)) != len(order):
+        checks.failed(f"ORDER {order}: want 1 to {len(relays) - 1} distinct relays of {relays}")
         return
     how = str(k.OUTAGE)
     if how not in ("drop", "kill"):
@@ -115,8 +116,9 @@ def test_relay_outage(cfg, run, cluster, target, checks, knobs):
     if problems:
         checks.failed("channel graph is not the multi-relay topology: " + "; ".join(problems))
         return
-    step, n = int(k.STEP_S), len(relays)
-    total = step * n
+    # n relays, one phase per outage plus the first: ORDER may take out fewer than n - 1
+    step, n, phases_n = int(k.STEP_S), len(relays), len(order) + 1
+    total = step * phases_n
     checks.record(f"{n} relays {', '.join(f'node-{r}' for r in relays)}; outage {how}, one every {step} s in the order "
                   f"{', '.join(f'node-{r}' for r in order)}; {total} s of download")
 
@@ -208,12 +210,12 @@ def test_relay_outage(cfg, run, cluster, target, checks, knobs):
         for i, v in enumerate(sec):
             ps = ping_at.get(i, [])
             ok = [x for x in ps if x is not None]
-            w.writerow([i, n - min(i // step, n - 1), v, round(st.median(ok), 1) if ok else "", len(ps) - len(ok)])
+            w.writerow([i, n - min(i // step, phases_n - 1), v, round(st.median(ok), 1) if ok else "", len(ps) - len(ok)])
     (run / "t37-transfers.json").write_text(json.dumps({"t0": t0, "results": results, "restarts": restarts, "outages": outages}))
     (run / "t37-relays.json").write_text(json.dumps(relay_rows))
 
     phases = []
-    for i in range(n):
+    for i in range(phases_n):
         a, b = i * step, (i + 1) * step
         bins = sec[a:b]
         ph_pings = [p for p in pings if a <= p[1] - t0 < b]
@@ -236,7 +238,7 @@ def test_relay_outage(cfg, run, cluster, target, checks, knobs):
                        "mbit_median": round(st.median(bins), 2) if bins else None, "zero_seconds": zero, "longest_stall_s": longest,
                        "ping_p50_ms": ps.get("p50_ms"), "ping_p95_ms": ps.get("p95_ms"), "ping_loss_pct": ps.get("loss_pct"),
                        "ping_sent": ps.get("sent"), "forwarded_share_pct": share})
-    for i in range(1, n):
+    for i in range(1, phases_n):
         prev = phases[i - 1]["mbit_mean"] or 0
         bins = sec[i * step:(i + 1) * step]
         back = next((j for j, v in enumerate(bins) if v >= prev / 2), None) if prev else None

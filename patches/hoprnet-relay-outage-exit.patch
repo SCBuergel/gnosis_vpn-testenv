@@ -1,3 +1,9 @@
+6049d45fa9 tune(surb-store): ring buffer of 40 000 SURBs per pseudonym
+7afb8f26a6 fix(surb-store): purge SURBs through a relay whose connection dropped, so the distress signal sees the shortage
+8bb24625e4 fix(hopr-lib): invalidate SURBs through a relay while the connection to it is down
+7f16a2f719 fix(session): datagram sessions deliver frames as they complete, without reordering
+e5ce6881a2 fix(session): abandon a gap once the frame behind it has waited max_wait
+80a6324e17 fix(session): datagram-aware UDP copy loop end to end — release/4.0 (#8421) (#8423)
 From e5ce6881a2ed0fbca3aa2fc29eae79d11841bb00 Mon Sep 17 00:00:00 2001
 From: debug <debug@localhost>
 Date: Fri, 9 Oct 2026 22:43:08 +0000

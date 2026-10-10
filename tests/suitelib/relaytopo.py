@@ -29,6 +29,7 @@ client on the exit's machine, so ten WireGuard servers shared the work one does 
 see a limit in it. One traffic target serves all. The layout is written to CONFIG_DIR/relay-topology.json by
 tests/relay_topology.py and read back by the tests."""
 import json
+import os
 import string
 from pathlib import Path
 
@@ -119,6 +120,11 @@ def render_client_config(templates_dir, c, hops=1, pix_on=False):
         "\n# relay-scaling topology: exactly one outgoing channel to each of this client's relays\n"
         f"[strategy]\nmin_open_channels = {len(peers)}\ntarget_open_channels = {len(peers)}\n\n"
         "[strategy.channel_allowlist]\nenabled = true\npeers = [" + ", ".join(f'"{a}"' for a in peers) + "]\n")
+    # RELAYTOPO_CLIENT_TOML: more client configuration for an experiment (literal "\n" for newlines), e.g.
+    # '[connection.surb_balancing.main]\nbuffer = "25 MB"'
+    extra = os.environ.get("RELAYTOPO_CLIENT_TOML", "").replace("\\n", "\n").strip()
+    if extra:
+        text += "\n# experiment (RELAYTOPO_CLIENT_TOML)\n" + extra + "\n"
     return text
 
 

@@ -157,6 +157,10 @@ machines = [
             env["MULTIHOST_NODE_ENV"] = self.a.node_env
         if self.a.client_log:
             env["CLIENT_LOG_LEVEL"] = self.a.client_log
+        if self.a.client_env:
+            env["CLIENT_EXTRA_ENV"] = self.a.client_env
+        if self.a.client_toml:
+            env["RELAYTOPO_CLIENT_TOML"] = self.a.client_toml
         return " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
 
     def node_logs(self, run):
@@ -242,6 +246,8 @@ def main():
     r.add_argument("--specs", action="store_true", help="record every machine's specs and benchmarks (~60 s)")
     r.add_argument("--node-log", help="RUST_LOG of every hoprd (relays, exit), e.g. 'info,hopr_transport_session=debug'")
     r.add_argument("--node-env", help="more 'K=V K=V' for every hoprd")
+    r.add_argument("--client-toml", help="more client configuration, literal \\n for newlines (RELAYTOPO_CLIENT_TOML)")
+    r.add_argument("--client-env", help="more 'K=V K=V' for the client container (CLIENT_EXTRA_ENV)")
     r.add_argument("--client-log", help="RUST_LOG of the client (default: the justfile's CLIENT_LOG_LEVEL)")
     r.add_argument("--reup", action="store_true", help="a fresh chain and stack on a kept fleet (new log levels or binaries)")
     r.add_argument("--node-logs", action="store_true", help="fetch every node's and the client's whole log after the test (keeps the client's DEBUG lines)")
