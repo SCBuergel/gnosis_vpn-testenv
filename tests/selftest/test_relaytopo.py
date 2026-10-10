@@ -358,3 +358,24 @@ def test_multihost_refuses_duplicate_client_identities():
     frozen = [{"id": 0, "address": addr(60)}, {"id": 1, "address": addr(61)}]
     with pytest.raises(SystemExit, match="are the same"):
         multihost.merge(roles, "", [("relays", r1, {"nodes": [], "extras": frozen}), ("exits", e1, {"nodes": [], "extras": frozen})])
+
+
+def test_multi_relay_layout_config_and_channels():
+    lay = relaytopo.layout("multi-relay", 5)
+    assert lay["relays"] == [0, 1, 2, 3, 4] and lay["exits"] == [5] and lay["cluster_size"] == 6 and lay["n"] == 1
+    assert [(c["relays"], c["exit"], c["dest"]) for c in lay["clients"]] == [([0, 1, 2, 3, 4], 5, "node-5")]
+    topo = relaytopo.with_addresses(lay, status(6, 1))
+    c = topo["clients"][0]
+    cfg = tomllib.loads(relaytopo.render_client_config(TEMPLATES, c))
+    # the client's own strategy opens one channel to each of the five relays, and to nothing else
+    assert cfg["strategy"]["min_open_channels"] == 5 and cfg["strategy"]["target_open_channels"] == 5
+    assert cfg["strategy"]["channel_allowlist"]["peers"] == [addr(r) for r in range(5)]
+    ok = [ch(c["address"], addr(r)) for r in range(5)] + [ch(addr(5), addr(r)) for r in range(5)]
+    assert relaytopo.check_channels(topo, ok)[0] == []
+    assert any("gnosis_vpn-client: 4 channels out" in p and "want 5" in p for p in relaytopo.check_channels(topo, ok[1:])[0])
+    assert any("node-5" in p and "4 channels out" in p for p in relaytopo.check_channels(topo, ok[:-1])[0])
+    # a topology saved before multi-relay (no "relays" per client) still reads as one relay
+    old = relaytopo.with_addresses(relaytopo.layout("paired", 2), status(4, 2))
+    for c in old["clients"]:
+        del c["relays"], c["relay_addresses"]
+    assert relaytopo.check_channels(old, exact(old))[0] == []

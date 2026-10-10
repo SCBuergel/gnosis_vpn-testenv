@@ -18,6 +18,9 @@ Two layouts on one localcluster started with `--channel-management none`:
   The exit holds one channel to every relay, so a client's forward path is pinned to its relay but its return paths
   (the client builds them, among the relays the exit has a channel to) come back over all of them (measured: each
   relay carried about 1/N of the return traffic, also with one client).
+- multi-relay N (T37-relay-outage): relays are nodes 0..N-1, node N is the only exit, one client. The client holds a
+  channel to every relay (allowlist of all N, min = target = N) and so does the exit, so both directions spread over
+  the N relays and the stack lives on with any one of them.
 
 In paired and shared, client k has its own VPN server (gnosis_vpn-server-{k-1}, bridge 8000+k-1, WireGuard
 51821+k-1), so N exits means N hoprd exit nodes with N servers behind them. In single-exit every client uses the one
@@ -29,7 +32,7 @@ import json
 import string
 from pathlib import Path
 
-MODES = ("paired", "shared", "single-exit")
+MODES = ("paired", "shared", "single-exit", "multi-relay")
 TOPOLOGY_FILE = "relay-topology.json"
 
 
@@ -53,16 +56,22 @@ def layout(mode, n, server_per_client=False):
     elif mode == "single-exit":
         relays, exits = list(range(n)), [n] * n
         pick_relay = lambda k: relays[k - 1]           # noqa: E731
+    elif mode == "multi-relay":
+        relays, exits = list(range(n)), [n]
+        pick_relay = lambda k: 0                       # noqa: E731
     else:
         relays, exits = [0], list(range(1, n + 1))
         pick_relay = lambda k: 0                       # noqa: E731
+    n_clients = 1 if mode == "multi-relay" else n
     # a VPN server per exit node: one per client in paired and shared, one for everybody in single-exit
     server_of = {x: i for i, x in enumerate(sorted(set(exits)))}
-    clients = [{"k": k, "name": client_name(k), "extra": k - 1, "relay": pick_relay(k), "exit": exits[k - 1],
+    # "relays": every relay the client (and its exit) holds a channel to; one, except in multi-relay
+    clients = [{"k": k, "name": client_name(k), "extra": k - 1, "relay": pick_relay(k),
+                "relays": list(relays) if mode == "multi-relay" else [pick_relay(k)], "exit": exits[k - 1],
                 "server": k - 1 if server_per_client else server_of[exits[k - 1]], "dest": f"node-{exits[k - 1]}",
-                "config": f"client-{k}.toml"} for k in range(1, n + 1)]
+                "config": f"client-{k}.toml"} for k in range(1, n_clients + 1)]
     exits = sorted(set(exits))
-    return {"mode": mode, "n": n, "cluster_size": len(relays) + len(exits), "relays": relays, "exits": exits,
+    return {"mode": mode, "n": n_clients, "cluster_size": len(relays) + len(exits), "relays": relays, "exits": exits,
             "servers": n if server_per_client else len(exits), "clients": clients}
 
 
@@ -75,8 +84,14 @@ def with_addresses(lay, status):
     for c in out["clients"]:
         c["address"] = extras[c["extra"]]["address"]
         c["relay_address"] = nodes[c["relay"]]["address"]
+        c["relay_addresses"] = [nodes[r]["address"] for r in relays_of(c)]
         c["exit_address"] = nodes[c["exit"]]["address"]
     return out
+
+
+def relays_of(c):
+    """Every relay a client holds a channel to (a topology saved before multi-relay has only "relay")."""
+    return c.get("relays") or [c["relay"]]
 
 
 def render_client_config(templates_dir, c, hops=1, pix_on=False):
@@ -92,6 +107,7 @@ def render_client_config(templates_dir, c, hops=1, pix_on=False):
         if old not in text:
             raise ValueError(f"client template has no {old}; cannot point client {c['k']} at its own server")
         text = text.replace(old, new)
+    peers = c.get("relay_addresses") or [c["relay_address"]]
     text = text.rstrip("\n") + (
         # the whole chain index before the node starts: at the client's default sync_tolerance = 50 an edge client
         # counts as synced with half the accounts loaded, wires its channel graph without the packet keys of the rest
@@ -100,9 +116,9 @@ def render_client_config(templates_dir, c, hops=1, pix_on=False):
         # 2026-10-09, cured only by a restart that happened to load more
         "\n\n# relay-scaling topology: every account synced before the node starts\n"
         "[blokli]\nsync_tolerance = 100\nconnection_sync_timeout = \"120s\"\n"
-        "\n# relay-scaling topology: exactly one outgoing channel, to this client's relay\n"
-        "[strategy]\nmin_open_channels = 1\ntarget_open_channels = 1\n\n"
-        f"[strategy.channel_allowlist]\nenabled = true\npeers = [\"{c['relay_address']}\"]\n")
+        "\n# relay-scaling topology: exactly one outgoing channel to each of this client's relays\n"
+        f"[strategy]\nmin_open_channels = {len(peers)}\ntarget_open_channels = {len(peers)}\n\n"
+        "[strategy.channel_allowlist]\nenabled = true\npeers = [" + ", ".join(f'"{a}"' for a in peers) + "]\n")
     return text
 
 
@@ -161,19 +177,20 @@ def check_channels(topo, channels, clients=None):
     problems, summary = [], {}
     wanted = [c for c in topo["clients"] if clients is None or c["k"] in clients]
     for c in wanted:
-        relay = c["relay_address"].lower()
+        want = {a.lower() for a in (c.get("relay_addresses") or [c["relay_address"]])}
+        want_txt = ", ".join(f"node-{r}" for r in relays_of(c))
         chs = out_of.get(c["address"].lower(), [])
         summary[c["name"]] = show(chs)
-        if len(chs) != 1:
-            problems.append(f"{c['name']}: {len(chs)} channels out ({show(chs)}), want exactly one, to node-{c['relay']}")
-        elif str(chs[0].get("destination", "")).lower() != relay:
-            problems.append(f"{c['name']}: its channel goes to {show(chs)}, want node-{c['relay']}")
-        elif str(chs[0].get("status", "")).lower() != "open":
-            problems.append(f"{c['name']}: its channel to node-{c['relay']} is {chs[0].get('status')}, want Open")
+        if len(chs) != len(want):
+            problems.append(f"{c['name']}: {len(chs)} channels out ({show(chs)}), want {len(want)}: one to each of {want_txt}")
+        elif {str(x.get("destination", "")).lower() for x in chs} != want:
+            problems.append(f"{c['name']}: its channels go to {show(chs)}, want {want_txt}")
+        elif any(str(x.get("status", "")).lower() != "open" for x in chs):
+            problems.append(f"{c['name']}: {show(chs)}, want Open")
     # an exit holds exactly one channel to the relay of every client that uses it (one relay in paired and shared)
     for ex in sorted({c["exit"] for c in wanted}):
         users = [c for c in topo["clients"] if c["exit"] == ex]
-        want = {c["relay_address"].lower(): c["relay"] for c in users}
+        want = {a.lower(): r for c in users for r, a in zip(relays_of(c), c.get("relay_addresses") or [c["relay_address"]])}
         addr = users[0]["exit_address"].lower()
         who = f"node-{ex} (exit of {', '.join(c['name'] for c in users)})"
         chs = out_of.get(addr, [])

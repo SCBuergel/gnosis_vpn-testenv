@@ -1,0 +1,192 @@
+From 63d19e3befd81a06c8b4cf809a59b5ce9257b249 Mon Sep 17 00:00:00 2001
+From: debug <debug@localhost>
+Date: Fri, 9 Oct 2026 22:43:08 +0000
+Subject: [PATCH 1/2] fix(session): abandon a gap once the frame behind it has
+ waited max_wait
+
+---
+ protocols/session/src/processing/sequencer.rs | 35 +++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/protocols/session/src/processing/sequencer.rs b/protocols/session/src/processing/sequencer.rs
+index 3b1519fb42..58e4048a6d 100644
+--- a/protocols/session/src/processing/sequencer.rs
++++ b/protocols/session/src/processing/sequencer.rs
+@@ -242,6 +242,11 @@ where
+ 
+                             return Poll::Ready(this.buffer.pop().map(|item| Ok(item.0.item)));
+                         } else if this.last_emitted.elapsed() >= *this.max_wait
++                            // The frame waiting right behind the gap has itself been held for max_wait: the
++                            // gap is lost, whatever was emitted in between. Timing gaps only from the last
++                            // emission drains a buffer of K interleaved gaps at one gap per max_wait (K x 3 s
++                            // of head-of-line blocking after a relay outage, every new frame queued behind it).
++                            || next.buffered_at.elapsed() >= *this.max_wait
+                             || this.buffer.len() == this.buffer.capacity()
+                             // The sequence has moved far enough past the gap to conclude the
+                             // missing frame was lost rather than reordered. Waiting out `max_wait`
+@@ -806,6 +811,36 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test_log::test(tokio::test)]
++    async fn sequencer_should_drain_interleaved_gaps_once_the_held_frames_are_old() -> anyhow::Result<()> {
++        // After a relay outage the buffer holds frames with gaps between them (1 of every 2 lost here).
++        // Every held frame has already waited out the timeout once the first gap is abandoned, so the
++        // rest must follow at once, not one gap per timeout window (5 windows here, dozens in the field).
++        let timeout = Duration::from_millis(50);
++        let (tx, rx) = futures::channel::mpsc::unbounded();
++
++        pin_mut!(tx);
++        tx.send_all(&mut futures::stream::iter([1u32, 3, 5, 7, 9, 11]).map(Ok)).await?;
++
++        let rx = rx.sequencer(timeout, 4096);
++        pin_mut!(rx);
++
++        assert_eq!(Some(1), rx.try_next().await?);
++        let now = Instant::now();
++        for frame in [3u32, 5, 7, 9, 11] {
++            assert!(matches!(rx.next().await, Some(Err(SessionError::FrameDiscarded(id))) if id == frame - 1));
++            assert_eq!(Some(frame), rx.try_next().await?);
++        }
++        assert!(
++            now.elapsed() < 3 * timeout,
++            "interleaved gaps took {:?} to drain, expected about one {:?} window",
++            now.elapsed(),
++            timeout
++        );
++
++        Ok(())
++    }
++
+     #[test_log::test(tokio::test)]
+     async fn sequencer_should_drain_contiguous_gap_within_single_timeout_window() -> anyhow::Result<()> {
+         let timeout = Duration::from_millis(50);
+-- 
+2.43.0
+
+
+From a04efdb0c8bc8ab2dff705f485102e4759372a66 Mon Sep 17 00:00:00 2001
+From: debug <debug@localhost>
+Date: Fri, 9 Oct 2026 23:20:19 +0000
+Subject: [PATCH 2/2] fix(session): datagram sessions deliver frames as they
+ complete, without reordering
+
+---
+ protocols/session/src/socket/mod.rs | 92 ++++++++++++++++++-----------
+ 1 file changed, 57 insertions(+), 35 deletions(-)
+
+diff --git a/protocols/session/src/socket/mod.rs b/protocols/session/src/socket/mod.rs
+index 7ba34ad24e..7a5b9496d3 100644
+--- a/protocols/session/src/socket/mod.rs
++++ b/protocols/session/src/socket/mod.rs
+@@ -208,7 +208,7 @@ impl<const C: usize> SessionSocket<C, Stateless<C>> {
+         // Pipeline OUT: Packets incoming from Downstream
+         // Continue receiving packets from downstream, unless we received a terminating frame.
+         // Once the terminating frame is received, the `packets_in_abort_handle` is triggered, terminating the pipeline.
+-        let downstream_frames_out = futures::stream::Abortable::new(packets_in, packets_in_abort_reg)
++        let reassembled = futures::stream::Abortable::new(packets_in, packets_in_abort_reg)
+             // Filter-out segments that we've seen already
+             .filter_map(move |packet| {
+                 let _span = stage1_span.enter();
+@@ -254,42 +254,64 @@ impl<const C: usize> SessionSocket<C, Stateless<C>> {
+                         None
+                     }
+                 })
+-            })
+-            // Put the frames into the correct sequence by Frame Ids
+-            .sequencer_with(crate::processing::SequencerConfig {
+-                max_wait: cfg.frame_timeout,
+-                capacity: cfg.capacity,
+-                max_item_age: cfg.max_frame_age,
+-                max_frames_behind_gap: cfg.max_frames_behind_gap,
+-            })
+-            // Discard frames missing from the sequence
+-            .filter_map(move |maybe_frame| {
+-                let _span = stage3_span.enter();
+-                future::ready(match maybe_frame {
+-                    Ok(frame) => {
+-                        last_emitted_frame_clone.store(frame.0.frame_id, std::sync::atomic::Ordering::Relaxed);
+-                        if frame.0.is_terminating {
+-                            tracing::warn!("terminating frame received");
+-                            packets_in_abort_handle.abort();
+-                        }
+-                        #[cfg(feature = "telemetry")]
+-                        s3.frame_emitted();
+-                        Some(Ok(frame.0))
+-                    }
+-                    // Downstream skips discarded frames
+-                    Err(SessionError::FrameDiscarded(frame_id)) | Err(SessionError::IncompleteFrame(frame_id)) => {
+-                        tracing::error!(frame_id, "frame discarded");
+-                        #[cfg(feature = "telemetry")]
+-                        s3.frame_discarded();
+-                        None
+-                    }
+-                    Err(err) => {
+-                        #[cfg(feature = "telemetry")]
+-                        s3.error();
+-                        Some(Err(std::io::Error::other(err)))
++            });
++
++        // Datagram (UDP-like) sessions get no reordering: a frame goes up the moment it is complete. Holding later
++        // frames back for a missing one turns every lost datagram into a frame_timeout stall of everything behind
++        // it; the datagram protocol above (WireGuard, and TCP inside it) copes with loss and reordering itself, but
++        // not with multi-second stalls (T37-relay-outage: a relay outage left the tunnel stalled until reconnect).
++        let downstream_frames_out = if cfg.datagram {
++            reassembled
++                .filter_map(move |frame| {
++                    let frame = frame.0;
++                    if frame.is_terminating {
++                        tracing::warn!("terminating frame received");
++                        packets_in_abort_handle.abort();
+                     }
++                    #[cfg(feature = "telemetry")]
++                    s3.frame_emitted();
++                    future::ready(Some(Ok::<_, std::io::Error>(frame)))
+                 })
+-            })
++                .boxed()
++        } else {
++            reassembled
++                // Put the frames into the correct sequence by Frame Ids
++                .sequencer_with(crate::processing::SequencerConfig {
++                    max_wait: cfg.frame_timeout,
++                    capacity: cfg.capacity,
++                    max_item_age: cfg.max_frame_age,
++                    max_frames_behind_gap: cfg.max_frames_behind_gap,
++                })
++                // Discard frames missing from the sequence
++                .filter_map(move |maybe_frame| {
++                    let _span = stage3_span.enter();
++                    future::ready(match maybe_frame {
++                        Ok(frame) => {
++                            last_emitted_frame_clone.store(frame.0.frame_id, std::sync::atomic::Ordering::Relaxed);
++                            if frame.0.is_terminating {
++                                tracing::warn!("terminating frame received");
++                                packets_in_abort_handle.abort();
++                            }
++                            #[cfg(feature = "telemetry")]
++                            s3.frame_emitted();
++                            Some(Ok(frame.0))
++                        }
++                        // Downstream skips discarded frames
++                        Err(SessionError::FrameDiscarded(frame_id)) | Err(SessionError::IncompleteFrame(frame_id)) => {
++                            tracing::error!(frame_id, "frame discarded");
++                            #[cfg(feature = "telemetry")]
++                            s3.frame_discarded();
++                            None
++                        }
++                        Err(err) => {
++                            #[cfg(feature = "telemetry")]
++                            s3.error();
++                            Some(Err(std::io::Error::other(err)))
++                        }
++                    })
++                })
++                .boxed()
++        }
+             .into_async_read();
+ 
+         Ok(Self {
+-- 
+2.43.0
+

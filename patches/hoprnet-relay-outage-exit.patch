@@ -1,0 +1,352 @@
+From e5ce6881a2ed0fbca3aa2fc29eae79d11841bb00 Mon Sep 17 00:00:00 2001
+From: debug <debug@localhost>
+Date: Fri, 9 Oct 2026 22:43:08 +0000
+Subject: [PATCH 1/4] fix(session): abandon a gap once the frame behind it has
+ waited max_wait
+
+---
+ protocols/session/src/processing/sequencer.rs | 35 +++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/protocols/session/src/processing/sequencer.rs b/protocols/session/src/processing/sequencer.rs
+index 3b1519fb42..58e4048a6d 100644
+--- a/protocols/session/src/processing/sequencer.rs
++++ b/protocols/session/src/processing/sequencer.rs
+@@ -242,6 +242,11 @@ where
+ 
+                             return Poll::Ready(this.buffer.pop().map(|item| Ok(item.0.item)));
+                         } else if this.last_emitted.elapsed() >= *this.max_wait
++                            // The frame waiting right behind the gap has itself been held for max_wait: the
++                            // gap is lost, whatever was emitted in between. Timing gaps only from the last
++                            // emission drains a buffer of K interleaved gaps at one gap per max_wait (K x 3 s
++                            // of head-of-line blocking after a relay outage, every new frame queued behind it).
++                            || next.buffered_at.elapsed() >= *this.max_wait
+                             || this.buffer.len() == this.buffer.capacity()
+                             // The sequence has moved far enough past the gap to conclude the
+                             // missing frame was lost rather than reordered. Waiting out `max_wait`
+@@ -806,6 +811,36 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test_log::test(tokio::test)]
++    async fn sequencer_should_drain_interleaved_gaps_once_the_held_frames_are_old() -> anyhow::Result<()> {
++        // After a relay outage the buffer holds frames with gaps between them (1 of every 2 lost here).
++        // Every held frame has already waited out the timeout once the first gap is abandoned, so the
++        // rest must follow at once, not one gap per timeout window (5 windows here, dozens in the field).
++        let timeout = Duration::from_millis(50);
++        let (tx, rx) = futures::channel::mpsc::unbounded();
++
++        pin_mut!(tx);
++        tx.send_all(&mut futures::stream::iter([1u32, 3, 5, 7, 9, 11]).map(Ok)).await?;
++
++        let rx = rx.sequencer(timeout, 4096);
++        pin_mut!(rx);
++
++        assert_eq!(Some(1), rx.try_next().await?);
++        let now = Instant::now();
++        for frame in [3u32, 5, 7, 9, 11] {
++            assert!(matches!(rx.next().await, Some(Err(SessionError::FrameDiscarded(id))) if id == frame - 1));
++            assert_eq!(Some(frame), rx.try_next().await?);
++        }
++        assert!(
++            now.elapsed() < 3 * timeout,
++            "interleaved gaps took {:?} to drain, expected about one {:?} window",
++            now.elapsed(),
++            timeout
++        );
++
++        Ok(())
++    }
++
+     #[test_log::test(tokio::test)]
+     async fn sequencer_should_drain_contiguous_gap_within_single_timeout_window() -> anyhow::Result<()> {
+         let timeout = Duration::from_millis(50);
+-- 
+2.43.0
+
+
+From 7f16a2f719a32ae77f0235433250004c4b496acf Mon Sep 17 00:00:00 2001
+From: debug <debug@localhost>
+Date: Fri, 9 Oct 2026 23:20:19 +0000
+Subject: [PATCH 2/4] fix(session): datagram sessions deliver frames as they
+ complete, without reordering
+
+---
+ protocols/session/src/socket/mod.rs | 92 ++++++++++++++++++-----------
+ 1 file changed, 57 insertions(+), 35 deletions(-)
+
+diff --git a/protocols/session/src/socket/mod.rs b/protocols/session/src/socket/mod.rs
+index 7ba34ad24e..7a5b9496d3 100644
+--- a/protocols/session/src/socket/mod.rs
++++ b/protocols/session/src/socket/mod.rs
+@@ -208,7 +208,7 @@ impl<const C: usize> SessionSocket<C, Stateless<C>> {
+         // Pipeline OUT: Packets incoming from Downstream
+         // Continue receiving packets from downstream, unless we received a terminating frame.
+         // Once the terminating frame is received, the `packets_in_abort_handle` is triggered, terminating the pipeline.
+-        let downstream_frames_out = futures::stream::Abortable::new(packets_in, packets_in_abort_reg)
++        let reassembled = futures::stream::Abortable::new(packets_in, packets_in_abort_reg)
+             // Filter-out segments that we've seen already
+             .filter_map(move |packet| {
+                 let _span = stage1_span.enter();
+@@ -254,42 +254,64 @@ impl<const C: usize> SessionSocket<C, Stateless<C>> {
+                         None
+                     }
+                 })
+-            })
+-            // Put the frames into the correct sequence by Frame Ids
+-            .sequencer_with(crate::processing::SequencerConfig {
+-                max_wait: cfg.frame_timeout,
+-                capacity: cfg.capacity,
+-                max_item_age: cfg.max_frame_age,
+-                max_frames_behind_gap: cfg.max_frames_behind_gap,
+-            })
+-            // Discard frames missing from the sequence
+-            .filter_map(move |maybe_frame| {
+-                let _span = stage3_span.enter();
+-                future::ready(match maybe_frame {
+-                    Ok(frame) => {
+-                        last_emitted_frame_clone.store(frame.0.frame_id, std::sync::atomic::Ordering::Relaxed);
+-                        if frame.0.is_terminating {
+-                            tracing::warn!("terminating frame received");
+-                            packets_in_abort_handle.abort();
+-                        }
+-                        #[cfg(feature = "telemetry")]
+-                        s3.frame_emitted();
+-                        Some(Ok(frame.0))
+-                    }
+-                    // Downstream skips discarded frames
+-                    Err(SessionError::FrameDiscarded(frame_id)) | Err(SessionError::IncompleteFrame(frame_id)) => {
+-                        tracing::error!(frame_id, "frame discarded");
+-                        #[cfg(feature = "telemetry")]
+-                        s3.frame_discarded();
+-                        None
+-                    }
+-                    Err(err) => {
+-                        #[cfg(feature = "telemetry")]
+-                        s3.error();
+-                        Some(Err(std::io::Error::other(err)))
++            });
++
++        // Datagram (UDP-like) sessions get no reordering: a frame goes up the moment it is complete. Holding later
++        // frames back for a missing one turns every lost datagram into a frame_timeout stall of everything behind
++        // it; the datagram protocol above (WireGuard, and TCP inside it) copes with loss and reordering itself, but
++        // not with multi-second stalls (T37-relay-outage: a relay outage left the tunnel stalled until reconnect).
++        let downstream_frames_out = if cfg.datagram {
++            reassembled
++                .filter_map(move |frame| {
++                    let frame = frame.0;
++                    if frame.is_terminating {
++                        tracing::warn!("terminating frame received");
++                        packets_in_abort_handle.abort();
+                     }
++                    #[cfg(feature = "telemetry")]
++                    s3.frame_emitted();
++                    future::ready(Some(Ok::<_, std::io::Error>(frame)))
+                 })
+-            })
++                .boxed()
++        } else {
++            reassembled
++                // Put the frames into the correct sequence by Frame Ids
++                .sequencer_with(crate::processing::SequencerConfig {
++                    max_wait: cfg.frame_timeout,
++                    capacity: cfg.capacity,
++                    max_item_age: cfg.max_frame_age,
++                    max_frames_behind_gap: cfg.max_frames_behind_gap,
++                })
++                // Discard frames missing from the sequence
++                .filter_map(move |maybe_frame| {
++                    let _span = stage3_span.enter();
++                    future::ready(match maybe_frame {
++                        Ok(frame) => {
++                            last_emitted_frame_clone.store(frame.0.frame_id, std::sync::atomic::Ordering::Relaxed);
++                            if frame.0.is_terminating {
++                                tracing::warn!("terminating frame received");
++                                packets_in_abort_handle.abort();
++                            }
++                            #[cfg(feature = "telemetry")]
++                            s3.frame_emitted();
++                            Some(Ok(frame.0))
++                        }
++                        // Downstream skips discarded frames
++                        Err(SessionError::FrameDiscarded(frame_id)) | Err(SessionError::IncompleteFrame(frame_id)) => {
++                            tracing::error!(frame_id, "frame discarded");
++                            #[cfg(feature = "telemetry")]
++                            s3.frame_discarded();
++                            None
++                        }
++                        Err(err) => {
++                            #[cfg(feature = "telemetry")]
++                            s3.error();
++                            Some(Err(std::io::Error::other(err)))
++                        }
++                    })
++                })
++                .boxed()
++        }
+             .into_async_read();
+ 
+         Ok(Self {
+-- 
+2.43.0
+
+
+From 8bb24625e4a8b5924dd14aa144f40ec63bd8f7b1 Mon Sep 17 00:00:00 2001
+From: debug <debug@localhost>
+Date: Fri, 9 Oct 2026 23:23:35 +0000
+Subject: [PATCH 3/4] fix(hopr-lib): invalidate SURBs through a relay while the
+ connection to it is down
+
+---
+ hopr/hopr-lib/src/builder.rs | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/hopr/hopr-lib/src/builder.rs b/hopr/hopr-lib/src/builder.rs
+index a444013d76..c5fdd73922 100644
+--- a/hopr/hopr-lib/src/builder.rs
++++ b/hopr/hopr-lib/src/builder.rs
+@@ -621,16 +621,35 @@ where
+     {
+         let network_events = network.subscribe_network_events();
+         let graph_updater = graph.clone();
++        // A relay we lose the connection to is no use as the first hop of a stored SURB: replying through it
++        // loses the packet. Mark it invalid in the SURB store until it connects again, as a closed channel is
++        // (T37-relay-outage: an exit kept spending SURBs through a silent relay long after it went away).
++        let surb_store = transport_api.surb_store().clone();
++        let key_ids = chain_api.clone();
+         spawn(async move {
+             network_events
+                 .for_each(|event| {
+                     let graph_updater = graph_updater.clone();
++                    let surb_store = surb_store.clone();
++                    let key_ids = key_ids.clone();
+                     async move {
+                         let (peer_id, connected) = match event {
+                             hopr_api::network::NetworkEvent::PeerConnected(p) => (p, true),
+                             hopr_api::network::NetworkEvent::PeerDisconnected(p) => (p, false),
+                         };
+                         if let Ok(opk) = hopr_api::OffchainPublicKey::from_peerid(&peer_id) {
++                            {
++                                use hopr_api::chain::{ChainKeyOperations, KeyIdMapping};
++                                use hopr_transport::SurbStore;
++                                if let Some(relayer) = key_ids.key_id_mapper_ref().map_key_to_id(&opk) {
++                                    if connected {
++                                        surb_store.revalidate_relayer(&relayer);
++                                    } else {
++                                        surb_store.invalidate_relayer(&relayer);
++                                    }
++                                    tracing::info!(%peer_id, connected, "SURB first-relayer validity follows the connection");
++                                }
++                            }
+                             graph_updater.record_edge(hopr_api::graph::MeasurableEdge::<
+                                 hopr_transport::NeighborTelemetry,
+                                 hopr_transport::PathTelemetry,
+-- 
+2.43.0
+
+
+From 7afb8f26a67559f69f2d4be6eb65e23bcc997e49 Mon Sep 17 00:00:00 2001
+From: debug <debug@localhost>
+Date: Sat, 10 Oct 2026 00:19:17 +0000
+Subject: [PATCH 4/4] fix(surb-store): purge SURBs through a relay whose
+ connection dropped, so the distress signal sees the shortage
+
+---
+ hopr/hopr-lib/src/builder.rs     |  2 +-
+ protocols/hopr/src/surb_store.rs | 53 ++++++++++++++++++++++++++++++++
+ 2 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/hopr/hopr-lib/src/builder.rs b/hopr/hopr-lib/src/builder.rs
+index c5fdd73922..6e7150b296 100644
+--- a/hopr/hopr-lib/src/builder.rs
++++ b/hopr/hopr-lib/src/builder.rs
+@@ -645,7 +645,7 @@ where
+                                     if connected {
+                                         surb_store.revalidate_relayer(&relayer);
+                                     } else {
+-                                        surb_store.invalidate_relayer(&relayer);
++                                        surb_store.purge_relayer(&relayer);
+                                     }
+                                     tracing::info!(%peer_id, connected, "SURB first-relayer validity follows the connection");
+                                 }
+diff --git a/protocols/hopr/src/surb_store.rs b/protocols/hopr/src/surb_store.rs
+index ff85042bdb..c62e8dd56f 100644
+--- a/protocols/hopr/src/surb_store.rs
++++ b/protocols/hopr/src/surb_store.rs
+@@ -222,6 +222,22 @@ impl MemorySurbStore {
+         }
+     }
+ 
++    /// Invalidates `relayer` (see [`SurbStore::invalidate_relayer`]) and purges every stored SURB
++    /// whose return path starts with it, at once. For a relayer that is gone rather than unpayable:
++    /// a lazily skipped SURB still counts as left ([`FoundSurb::remaining`]) until a pop reaches it,
++    /// which hides the real shortage from the SURB distress signal, so the counterparty is never asked
++    /// to refill while replies go unrouted (T37-relay-outage: return latency grew to 20 s after a relay
++    /// outage). Purged SURBs do not come back on [`SurbStore::revalidate_relayer`]; fresh ones do.
++    pub fn purge_relayer(&self, relayer: &HoprKeyIdent) -> usize {
++        self.invalidated_relayers.write().insert(*relayer);
++        let mut purged = 0;
++        for (_, rb) in self.surbs_per_pseudonym.iter() {
++            purged += rb.retain(|surb| self.is_surb_usable(surb));
++        }
++        tracing::info!(%relayer, purged, "purged stored SURBs whose return path starts with an unreachable relayer");
++        purged
++    }
++
+     /// Whether `relayer` is currently unusable as a return path's first hop.
+     pub fn is_relayer_invalidated(&self, relayer: &HoprKeyIdent) -> bool {
+         self.invalidated_relayers.read().contains(relayer)
+@@ -426,6 +442,14 @@ impl<S> SurbRingBuffer<S> {
+         }
+     }
+ 
++    /// Keeps only the SURBs `keep` accepts; returns how many were removed.
++    pub fn retain<F: Fn(&S) -> bool>(&self, keep: F) -> usize {
++        let mut rb = self.surbs.lock();
++        let before = rb.len();
++        rb.retain(|(_, surb)| keep(surb));
++        before - rb.len()
++    }
++
+     /// Pops the next SURB that `is_valid` accepts, in the buffer's [`SurbPopOrder`].
+     ///
+     /// **Destructive:** rejected entries are discarded, not skipped, so an unusable SURB neither is
+@@ -531,6 +555,35 @@ mod tests {
+     /// A return path straight to the recipient, which needs no payment channel.
+     const DIRECT: u8 = 1;
+ 
++    #[test]
++    fn memory_surb_store_purge_should_leave_only_usable_surbs_counted_as_remaining() -> anyhow::Result<()> {
++        let (dead, alive) = (HoprKeyIdent::from(1u32), HoprKeyIdent::from(2u32));
++
++        let store = MemorySurbStore::default();
++        let pseudonym = HoprPseudonym::random();
++        store.insert_surbs(
++            pseudonym,
++            vec![
++                ([1u8; 8], surb_via(dead, TWO_HOP)?),
++                ([2u8; 8], surb_via(alive, TWO_HOP)?),
++                ([3u8; 8], surb_via(dead, TWO_HOP)?),
++                ([4u8; 8], surb_via(alive, TWO_HOP)?),
++                ([5u8; 8], surb_via(dead, TWO_HOP)?),
++            ],
++        );
++
++        assert_eq!(3, store.purge_relayer(&dead));
++
++        let found = store
++            .find_surb(SurbMatcher::Pseudonym(pseudonym))
++            .ok_or(anyhow::anyhow!("expected a usable SURB"))?;
++        // Only the other healthy SURB is left: the dead ones must not count towards `remaining`,
++        // or the distress signal (driven by it) cannot see the shortage.
++        assert_eq!(1, found.remaining, "invalidated SURBs must be purged at once");
++
++        Ok(())
++    }
++
+     #[test]
+     fn memory_surb_store_should_skip_surbs_whose_first_relayer_was_invalidated() -> anyhow::Result<()> {
+         let (dead, alive) = (HoprKeyIdent::from(1u32), HoprKeyIdent::from(2u32));
+-- 
+2.43.0
+

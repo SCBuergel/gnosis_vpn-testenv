@@ -47,20 +47,23 @@ def full_topology(cluster, node):
 
 
 def open_exit_channels(cluster, topo, amount, timeout):
-    """One channel from every exit to the relay of each client that uses it: one per exit in paired and shared (T34's
-    exits all go to the same relay), one to every relay in single-exit. Idempotent: a channel already Open is left
-    alone, so a re-run after a partial failure does not open a second one."""
-    pending = {(c["exit"], c["relay"]): c for c in topo["clients"]}
+    """One channel from every exit to each relay of each client that uses it: one per exit in paired and shared (T34's
+    exits all go to the same relay), one to every relay in single-exit and multi-relay. Idempotent: a channel already
+    Open is left alone, so a re-run after a partial failure does not open a second one."""
+    pending = {}
+    for c in topo["clients"]:
+        for r, a in zip(relaytopo.relays_of(c), c.get("relay_addresses") or [c["relay_address"]]):
+            pending[(c["exit"], r)] = a
     t0 = time.time()
     while pending:
-        for (ex, _), c in list(pending.items()):
-            outs = [x for x in cluster.open_outgoing(ex) if str(x.get("peerAddress", "")).lower() == c["relay_address"].lower()]
+        for (ex, relay), addr in list(pending.items()):
+            outs = [x for x in cluster.open_outgoing(ex) if str(x.get("peerAddress", "")).lower() == addr.lower()]
             if outs:
-                say(f"node-{ex} (exit) -> node-{c['relay']} (relay): Open")
-                del pending[(ex, c["relay"])]
+                say(f"node-{ex} (exit) -> node-{relay} (relay): Open")
+                del pending[(ex, relay)]
                 continue
-            r = cluster.api(ex, "POST", "/api/v4/channels", {"destination": c["relay_address"], "amount": amount}, timeout=120)
-            say(f"node-{ex} (exit) -> node-{c['relay']} (relay): open {amount}: {r.strip()[:160]}")
+            r = cluster.api(ex, "POST", "/api/v4/channels", {"destination": addr, "amount": amount}, timeout=120)
+            say(f"node-{ex} (exit) -> node-{relay} (relay): open {amount}: {r.strip()[:160]}")
         if pending:
             if time.time() - t0 > timeout:
                 raise SystemExit(f"exit channels not open after {timeout}s: {sorted(pending)}")

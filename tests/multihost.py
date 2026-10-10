@@ -64,7 +64,7 @@ CHAIN_IMAGE = "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid
 PORTS = {"relays": (3000, 9000), "exits": (3100, 9100)}
 DATA = {"relays": "/tmp/hopr-mh-relays", "exits": "/tmp/hopr-mh-exits"}
 CHAIN_NAME = "hopr-chain"
-MODES = ("paired", "shared", "single-exit", "standard")
+MODES = ("paired", "shared", "single-exit", "multi-relay", "standard")
 REMOTE_CONFIG_DIR = "/tmp/gnosis_vpn-testenv"
 FUND_LOCK = "/tmp/gnosis_vpn-testenv-funding.lock"   # one localcluster funding from the chain's dev account at a time
 # clusters fund from that one account; launched this many seconds apart they fund side by side (0: one after the other).
@@ -279,7 +279,11 @@ def launch_cluster(roles, rname, m, size, extras, token, funder_key=None):
     # the background job alone redirected, not an `a && b && c &` list: a backgrounded list keeps the ssh session's
     # stdout open and the call returned only at its timeout
     fund = f"HOPRD_LOCALCLUSTER_FUNDER_KEY={funder_key} " if funder_key else ""
-    h.run(f"rm -rf {data}; mkdir -p {data}/logs; cd /tmp; setsid nohup env RUST_LOG=info {fund}{lc} {args} "
+    # MULTIHOST_NODE_LOG: RUST_LOG of the localcluster and the hoprd nodes it spawns (they inherit it); MULTIHOST_NODE_ENV:
+    # more "K=V K=V" for every node (a debugging run's knobs)
+    log_level = shlex.quote(os.environ.get("MULTIHOST_NODE_LOG", "info"))
+    node_env = " ".join(shlex.quote(kv) for kv in os.environ.get("MULTIHOST_NODE_ENV", "").split())
+    h.run(f"rm -rf {data}; mkdir -p {data}/logs; cd /tmp; setsid nohup env RUST_LOG={log_level} {node_env} {fund}{lc} {args} "
           f"> {data}/logs/localcluster.log 2>&1 < /dev/null & echo started", timeout=60)
     say(f"{rname}: localcluster of {size} node(s) on {m['name']} {h} (p2p {m['addr']}:{p2p}+, api :{api}+)")
 
@@ -672,7 +676,7 @@ def down(args, opts=None, roles=None):
                                               timeout=300), ex["machines"]))
         list(pool.map(lambda rm: stop_cluster(roles, rm[0], rm[1]),
                       [(r, m) for r in (("exits",) if keep else ("exits", "relays")) for m in roles[r]["machines"]]))
-    if not keep:
+    if not keep and not getattr(args, "chain_started", False):
         chain(roles)["host"].run(f"docker rm -f {CHAIN_NAME} >/dev/null 2>&1; true", timeout=120)
     cfg = Config()
     for f in ("multihost.json", "multihost.env", relaytopo.TOPOLOGY_FILE):
@@ -693,7 +697,17 @@ def up(args):
             raise SystemExit(f"--keep-chain: no chain at {chain_url(roles)}")
         merged = merge(roles, opts, start_clusters(roles, n_relays, n_exits, n, secrets.token_hex(16), adopt=("relays",)))
     else:
-        start_chain(roles)
+        if getattr(args, "chain_started", False):
+            # a fresh chain started ahead (`chain-start`, while the machines were still being prepared): ~70 s saved
+            # it may still be starting (Blokli answers ~70 s after the container starts): waited for, as start_chain does
+            t0 = time.time()
+            while Host(None).out(f"curl -s -o /dev/null -m 5 -w '%{{http_code}}' {chain_url(roles)}/", timeout=20) in ("", "000"):
+                if time.time() - t0 > 300:
+                    raise SystemExit(f"--chain-started: no chain answering at {chain_url(roles)} after 300 s")
+                time.sleep(3)
+            say(f"chain started ahead answers at {chain_url(roles)} (waited {int(time.time() - t0)} s)")
+        else:
+            start_chain(roles)
         prepare_funders(roles)
         merged = merge(roles, opts, start_clusters(roles, n_relays, n_exits, n, secrets.token_hex(16)))
     status_file = cfg.config_dir / "multihost.json"
@@ -1039,6 +1053,8 @@ def main():
     u.add_argument("--timeout", type=int, default=900)
     u.add_argument("--server-per-client", action="store_true", help="single-exit: a VPN server per client, as the 2026-09-30 run had it")
     u.add_argument("--keep-chain", action="store_true", help="use the running chain and adopt the relays' running clusters (relay-start)")
+    u.add_argument("--chain-started", action="store_true", help="use the fresh chain `chain-start` started (nothing else on it yet)")
+    sub.add_parser("chain-start", help="a fresh chain container on the chain machine, waited for until Blokli answers (for up --chain-started)")
     d = sub.add_parser("down", help="stop everything on every machine")
     d.add_argument("--keep-chain", action="store_true", help="leave the chain and the relay clusters running")
     sub.add_parser("relay-start", help="a one-node relay cluster on every relay machine that runs none (the chain must be up)")
@@ -1051,7 +1067,7 @@ def main():
     p = sub.add_parser("provision", help="copy what the machines are missing from this one")
     p.add_argument("--parallel", type=int, default=8)
     args = ap.parse_args()
-    {"up": up, "down": down, "check": check, "provision": provision, "relay-start": relay_start, "doctor": doctor}[args.cmd](args)
+    {"up": up, "chain-start": lambda a: start_chain(load_hosts(a.hosts)[1]), "down": down, "check": check, "provision": provision, "relay-start": relay_start, "doctor": doctor}[args.cmd](args)
 
 
 if __name__ == "__main__":
